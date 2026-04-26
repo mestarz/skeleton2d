@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>skeleton2d editor</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<div id="app">
+
+  <div id="topbar">
+    <span class="title">skeleton2d</span>
+    <button id="btn-load-example">Load humanoid example</button>
+    <label class="btn">Load skeleton.json<input type="file" id="file-skeleton" accept=".json" /></label>
+    <label class="btn">Load animations.json<input type="file" id="file-anims" accept=".json" /></label>
+    <button id="btn-export-skel-json" class="btn-primary">Export skeleton (JSON+Lua)</button>
+    <button id="btn-export-anims-json" class="btn-primary">Export animations (JSON+Lua)</button>
+  </div>
+
+  <aside id="left">
+    <div class="panel-title">Parts</div>
+    <ul id="parts-list"></ul>
+    <div id="parts-actions">
+      <input type="text" id="new-part-name" placeholder="newPart" />
+      <button id="btn-add-part">+</button>
+      <button id="btn-del-part">−</button>
+    </div>
+  </aside>
+
+  <main id="center">
+    <div id="canvas-host">
+      <canvas id="canvas"></canvas>
+      <div id="canvas-help">drag PNG onto a part name → assign image · drag handles on canvas to adjust</div>
+      <div class="drop-overlay" id="drop-overlay">Drop PNG to assign to selected part</div>
+    </div>
+  </main>
+
+  <aside id="right">
+    <div class="tab-bar">
+      <button data-tab="part" class="active">Part</button>
+      <button data-tab="anim">Animation</button>
+    </div>
+
+    <div class="tab-panel active" data-tab="part">
+      <div class="group" id="part-props">
+        <div class="panel-title" style="position:relative">Selected part</div>
+        <div id="part-name-display" style="padding:6px 10px;color:#fff;font-weight:600">(none)</div>
+
+        <div class="field"><label>parent</label>
+          <select id="prop-parent" style="background:#1e1e1e;border:1px solid #444;color:#ddd;padding:3px 6px;flex:1"></select>
+        </div>
+        <div class="field"><label>png</label>
+          <input id="prop-png" type="text" placeholder="(none — placeholder)" />
+        </div>
+        <div class="field"><label>image</label>
+          <label class="btn" style="margin-left:auto">Load PNG<input type="file" id="prop-png-file" accept="image/png" style="display:none" /></label>
+          <button class="btn" id="prop-png-clear">Clear</button>
+        </div>
+        <div class="field-2"><label>size</label>
+          <input id="prop-w" type="number" step="1" />
+          <input id="prop-h" type="number" step="1" />
+        </div>
+        <div class="field-2"><label>anchor</label>
+          <input id="prop-anchor-x" type="number" step="0.5" />
+          <input id="prop-anchor-y" type="number" step="0.5" />
+        </div>
+        <div class="field-2"><label>attachAt</label>
+          <input id="prop-attach-x" type="number" step="0.5" />
+          <input id="prop-attach-y" type="number" step="0.5" />
+        </div>
+        <div class="field"><label>restRot</label>
+          <input id="prop-restrot" type="number" step="1" />
+        </div>
+        <div class="field"><label>z</label>
+          <input id="prop-z" type="number" step="1" />
+        </div>
+      </div>
+    </div>
+
+    <div class="tab-panel" data-tab="anim">
+      <div class="group">
+        <div class="panel-title" style="position:relative">Keyframes (rot) for selected part in selected animation</div>
+        <ul id="keyframes" class="keyframes"></ul>
+        <div style="padding:6px 10px;display:flex;gap:6px">
+          <button class="btn" id="btn-add-kf">+ Add KF at current time</button>
+        </div>
+      </div>
+      <div class="group">
+        <div class="field"><label>duration</label>
+          <input id="anim-duration" type="number" step="0.05" />
+        </div>
+        <div class="field"><label>loop</label>
+          <input id="anim-loop" type="checkbox" />
+        </div>
+        <div class="field"><label>new name</label>
+          <input id="new-anim-name" type="text" placeholder="myAnim" />
+          <button class="btn" id="btn-add-anim">+</button>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <div id="timeline">
+    <div class="row">
+      <label>animation</label>
+      <select id="anim-select"></select>
+      <button class="btn transport-btn" id="btn-play">▶</button>
+      <button class="btn transport-btn" id="btn-pause">⏸</button>
+      <button class="btn transport-btn" id="btn-restart">⟲</button>
+      <label>facing</label>
+      <button class="btn transport-btn" id="btn-facing">→</button>
+      <label>scale</label>
+      <input id="view-scale" type="range" min="0.5" max="4" step="0.1" value="1.5" style="width:120px" />
+    </div>
+    <div class="row">
+      <label>time</label>
+      <input id="time-slider" type="range" min="0" max="1" step="0.01" value="0" />
+      <span id="time-display">0.00 / 1.00 s</span>
+    </div>
+  </div>
+
+  <div id="status"></div>
+</div>
+
+<script src="skeleton.js"></script>
+<script src="lua-export.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

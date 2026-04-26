@@ -1,0 +1,27 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "skeleton2d animation set",
+  "type": "object",
+  "additionalProperties": {
+    "type": "object",
+    "required": ["duration", "tracks"],
+    "properties": {
+      "duration": { "type": "number", "minimum": 0 },
+      "loop":     { "type": "boolean", "default": true },
+      "tracks": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["t"],
+            "properties": {
+              "t":   { "type": "number", "minimum": 0 },
+              "rot": { "type": "number" }
+            }
+          }
+        }
+      }
+    }
+  }
+}

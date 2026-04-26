@@ -1,0 +1,33 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "skeleton2d skeleton",
+  "type": "object",
+  "required": ["id", "version", "parts"],
+  "properties": {
+    "id":      { "type": "string" },
+    "version": { "type": "integer", "const": 1 },
+    "root":    { "type": "string", "description": "Optional explicit root part name; otherwise inferred as the part with parent=null." },
+    "parts": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["w", "h", "anchor", "attachAt"],
+        "properties": {
+          "parent":   { "type": ["string", "null"] },
+          "png":      { "type": ["string", "null"], "description": "Relative asset path; nil = placeholder render" },
+          "w":        { "type": "number" },
+          "h":        { "type": "number" },
+          "anchor":   { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 },
+          "attachAt": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 },
+          "restRot":  { "type": "number", "default": 0 },
+          "z":        { "type": "number", "default": 0, "description": "Draw order tiebreaker; higher = on top" },
+          "placeholderColor": {
+            "type": "array",
+            "items": { "type": "number" },
+            "minItems": 4, "maxItems": 4
+          }
+        }
+      }
+    }
+  }
+}
