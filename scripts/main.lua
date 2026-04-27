@@ -1,18 +1,17 @@
 -- ============================================================================
--- skeleton2d StaticSprite2D Demo (TapTap Maker / UrhoX)
+-- skeleton2d NanoVG Demo (TapTap Maker / UrhoX)
 --
--- 演示 skeleton2d 跑在 UrhoX 场景图渲染通路上：
---   - 每个骨骼部件 = 一个子 Node + StaticSprite2D 组件（一次性创建）
---   - 每帧 Skeleton.UpdateWorldTransforms 算出 wx/wy/wr，
---     再由 backends/taptap_sprite 同步到 node.position2D / rotation2D
+-- 演示 skeleton2d 使用 NanoVG 渲染路径：
+--   - 用 nvgCreateImage 加载图集纹理
+--   - 用 Skeleton.Draw() + NanoVG 后端绘制骨骼
+--   - 图集子区域通过 nvgImagePattern 偏移实现裁切
 --
--- 贴图使用图集模式（SpriteSheet2D）：每个角色 14 张部件图合为 1 张图集。
+-- UrhoX WebGL 环境中 StaticSprite2D 不可用，所有 2D 游戏均使用 NanoVG。
 -- ============================================================================
 
 require "LuaScripts/Utilities/Sample"
 
 local Skeleton = require "SkeletonRenderer"
-local SpriteBE = require "backends.taptap_sprite"
 local Weapons  = require "weapons"
 
 -- 图集子区域定义（由 Python 打包脚本生成，网格布局，2的幂次方尺寸）
@@ -72,18 +71,17 @@ local CHARACTERS = {
 
 local WEAPON_NAMES = { "handgun", "knife" }
 
-local PIXELS_PER_METER = 100
+-- ============================================================================
+-- 全局状态
+-- ============================================================================
+local vg       = nil
+local fontId   = -1
 
-local scene_      = nil
-local cameraNode  = nil
-local charNode    = nil
-local spriteRoot  = nil
-local skelInst    = nil
-local boneNodes   = nil
-local boneCount   = 0
+-- NanoVG 图集句柄
+local atlasImages = {}  -- { "Textures/xxx.png" = nvgImageHandle }
 
-local vg          = nil
-local fontId      = -1
+local skelInst  = nil
+local boneCount = 0
 
 local charIndex   = 1
 local currentAnim = "idle"
@@ -91,129 +89,260 @@ local animNames   = { "idle", "walk", "swing", "shoot", "hit" }
 local facing      = 1
 local weaponIdx   = 0
 
-local charX, charY = 0, -1.5
-local moveSpeed = 1.5
+-- 角色屏幕中心位置（像素）和缩放
+local charScreenX, charScreenY = 0, 0
+local charScale = 1.0
+
+local moveSpeed = 150  -- 像素/秒
 
 local showJoints = true
 local showHUD    = true
 
-local function setupScene()
-    scene_ = Scene()
-    scene_:CreateComponent("Octree")
-    scene_:CreateComponent("DebugRenderer")
+-- ============================================================================
+-- NanoVG 图集后端（给 Skeleton.Draw() 用）
+-- ============================================================================
 
-    cameraNode = scene_:CreateChild("Camera")
-    cameraNode.position = Vector3(0, 0, -10)
-    local camera = cameraNode:CreateComponent("Camera")
-    camera.orthographic = true
-    camera.orthoSize = 6.0
+-- 当前角色使用的图集信息
+local currentAtlasImage = 0  -- nvg image handle
+local currentAtlasRects = nil
+local currentWeaponAtlasImage = 0
+local currentWeaponAtlasRects = nil
 
-    local viewport = Viewport:new(scene_, camera)
-    renderer:SetViewport(0, viewport)
+--- 用 nvgImagePattern 绘制图集子区域
+--- partName -> 从 atlasRects 查子区域 -> 用 pattern offset 裁切
+local function drawAtlasRegion(partName, x, y, w, h)
+    if not vg then return end
+
+    -- 查找子区域信息
+    local rect = nil
+    local imgHandle = 0
+
+    if currentAtlasRects and currentAtlasRects[partName] then
+        rect = currentAtlasRects[partName]
+        imgHandle = currentAtlasImage
+    elseif partName == "weapon" and currentWeaponAtlasRects then
+        -- 武器用独立图集
+        local wname = WEAPON_NAMES[weaponIdx]
+        if wname and currentWeaponAtlasRects[wname] then
+            rect = currentWeaponAtlasRects[wname]
+            imgHandle = currentWeaponAtlasImage
+        end
+    end
+
+    if not rect or imgHandle == 0 then
+        -- 没有图集信息，画占位色块
+        nvgBeginPath(vg)
+        nvgRect(vg, x, y, w, h)
+        nvgFillColor(vg, nvgRGBA(200, 100, 100, 180))
+        nvgFill(vg)
+        return
+    end
+
+    -- 获取图集纹理实际尺寸
+    local atlasW, atlasH = nvgImageSize(vg, imgHandle)
+
+    -- nvgImagePattern 的原理：
+    -- 创建一个以 (ox, oy) 为图案起点、宽 ex 高 ey 的贴图映射
+    -- 我们需要把子区域 (rect.x, rect.y, rect.w, rect.h) 映射到绘制区域 (x, y, w, h)
+    --
+    -- 缩放因子：绘制尺寸 / 子区域尺寸 * 图集尺寸
+    -- 偏移：-rect.x * scale + x, -rect.y * scale + y
+    local scaleX = w / rect.w
+    local scaleY = h / rect.h
+    local patW = atlasW * scaleX
+    local patH = atlasH * scaleY
+    local ox = x - rect.x * scaleX
+    local oy = y - rect.y * scaleY
+
+    local paint = nvgImagePattern(vg, ox, oy, patW, patH, 0, imgHandle, 1.0)
+
+    nvgBeginPath(vg)
+    nvgRect(vg, x, y, w, h)
+    nvgFillPaint(vg, paint)
+    nvgFill(vg)
 end
 
-local function destroyCharacter()
-    if boneNodes then SpriteBE.Destroy(boneNodes); boneNodes = nil end
-    if spriteRoot and spriteRoot.Remove then spriteRoot:Remove(); spriteRoot = nil end
-    if charNode   and charNode.Remove   then charNode:Remove();   charNode = nil end
-    skelInst, boneCount = nil, 0
+--- 给 SkeletonRenderer.SetBackend 使用的后端
+local function createNanoVGBackend()
+    return {
+        drawImage = function(handle, x, y, w, h)
+            -- handle 在这里是 partName（字符串）
+            drawAtlasRegion(handle, x, y, w, h)
+        end,
+        fillRect = function(x, y, w, h, rgba)
+            if not vg then return end
+            nvgBeginPath(vg)
+            nvgRect(vg, x, y, w, h)
+            nvgFillColor(vg, nvgRGBA(rgba[1] or 200, rgba[2] or 100, rgba[3] or 100, rgba[4] or 220))
+            nvgFill(vg)
+        end,
+        getImage = function(path)
+            -- 返回 partName 作为 handle（非 nil/0 即表示"已加载"）
+            -- 我们需要从 path 反查 partName
+            -- 但 SkeletonRenderer.Draw 传入的 path 是 skeleton def 中的 png 字段
+            -- 而我们用图集渲染，需要把 png path 映射到 partName
+            -- 实际上 Draw() 里的 name 变量就是 partName
+            -- 但 backend.getImage 接收的是 p.png 路径...
+            -- 我们返回路径本身作为 handle，然后在 drawImage 中再映射
+            if path then return path end
+            return nil
+        end,
+        enqueueImage = function(path) end,
+        pushTransform = function()
+            if vg then nvgSave(vg) end
+        end,
+        popTransform = function()
+            if vg then nvgRestore(vg) end
+        end,
+        translate = function(x, y)
+            if vg then nvgTranslate(vg, x, y) end
+        end,
+        rotate = function(rad)
+            if vg then nvgRotate(vg, rad) end
+        end,
+        scale = function(sx, sy)
+            if vg then nvgScale(vg, sx, sy) end
+        end,
+    }
 end
 
-local WEAPONS_ATLAS_SIZE = { w = 256, h = 128 }
+-- ============================================================================
+-- 骨骼管理
+-- ============================================================================
 
-local function attachCurrentWeapon()
-    if weaponIdx == 0 then return end
-    local w = Weapons[WEAPON_NAMES[weaponIdx]]
-    if not (w and skelInst and boneNodes and spriteRoot) then return end
+-- 由于 Skeleton.Draw() 中 backend.getImage 传入的是 p.png 路径，
+-- 而 backend.drawImage 传入的是 getImage 返回的 handle（=path），
+-- 我们需要在 drawImage 中从 path 反查 partName。
+-- 为此，建立 png -> partName 的映射。
+local pngToPartName = {}
 
-    Skeleton.AttachWeapon(skelInst, w, "handR")
+local function buildPngMap(skeletonDef)
+    pngToPartName = {}
+    for name, p in pairs(skeletonDef.parts) do
+        if p.png then
+            pngToPartName[p.png] = name
+        end
+    end
+end
 
-    -- 武器图集：把当前武器的子区域以 "weapon" 为键传入，后端按 partName 查找
-    local weaponRects = { weapon = ATLAS_RECTS.weapons[WEAPON_NAMES[weaponIdx]] }
+--- 不用 Skeleton.Draw()，改为自己遍历绘制（这样能直接用 partName 查图集）
+local function drawSkeletonNanoVG(inst, sx, sy, fac, sc)
+    if not vg or not inst then return end
 
-    SpriteBE.AttachPart(boneNodes, spriteRoot, skelInst, "weapon", {
-        atlasPath        = "Textures/items_weapons.png",
-        atlasRects       = weaponRects,
-        atlasSize        = WEAPONS_ATLAS_SIZE,
-        pixelsPerMeter   = PIXELS_PER_METER,
-        baseOrderInLayer = 0,
-    })
+    nvgSave(vg)
+    nvgTranslate(vg, sx, sy)
+    if fac < 0 then
+        nvgScale(vg, -sc, sc)
+    elseif sc ~= 1 then
+        nvgScale(vg, sc, sc)
+    end
+
+    -- 收集所有 part，按 z 排序绘制
+    local sorted = {}
+    for name, p in pairs(inst.parts) do
+        if p.wx ~= nil then
+            sorted[#sorted + 1] = { name = name, p = p }
+        end
+    end
+    table.sort(sorted, function(a, b) return a.p.z < b.p.z end)
+
+    for _, item in ipairs(sorted) do
+        local name = item.name
+        local p = item.p
+
+        nvgSave(vg)
+        -- skeleton2d 的 wx/wy 是像素坐标，Y 向下
+        nvgTranslate(vg, p.wx, p.wy)
+        nvgRotate(vg, math.rad(p.wr or 0))
+        nvgTranslate(vg, -p.anchor[1], -p.anchor[2])
+
+        -- 绘制图集子区域
+        drawAtlasRegion(name, 0, 0, p.w, p.h)
+
+        nvgRestore(vg)
+    end
+
+    nvgRestore(vg)
 end
 
 local function buildCharacter(idx)
-    destroyCharacter()
     local def = CHARACTERS[idx]
-
-    charNode   = scene_:CreateChild("Character_" .. def.id)
-    spriteRoot = charNode:CreateChild("SpriteRoot")
 
     skelInst = Skeleton.New(def.skeleton)
     local first = def.animations[currentAnim] or def.animations.idle
     if first then Skeleton.Play(skelInst, first, { loop = first.loop ~= false }) end
 
-    -- 图集模式：传图集路径 + 子区域坐标，后端用 textureRect 选择子区域
-    boneNodes = SpriteBE.CreateNodes(spriteRoot, skelInst, {
-        atlasPath        = def.atlasPng,
-        atlasRects       = def.atlasRects,
-        atlasSize        = def.atlasSize,
-        pixelsPerMeter   = PIXELS_PER_METER,
-        baseOrderInLayer = 0,
-    })
+    -- 加载图集 NanoVG 纹理（只加载一次）
+    if not atlasImages[def.atlasPng] then
+        atlasImages[def.atlasPng] = nvgCreateImage(vg, def.atlasPng, 0)
+        print("[NVG] Created atlas image: " .. def.atlasPng .. " -> " .. tostring(atlasImages[def.atlasPng]))
+    end
+    currentAtlasImage = atlasImages[def.atlasPng]
+    currentAtlasRects = def.atlasRects
 
     boneCount = 0
-    for _ in pairs(boneNodes) do boneCount = boneCount + 1 end
+    for _ in pairs(skelInst.parts) do boneCount = boneCount + 1 end
 
-    attachCurrentWeapon()
+    -- 初始化武器
+    currentWeaponAtlasImage = 0
+    currentWeaponAtlasRects = nil
+    weaponIdx = 0
+
+    print("[CHAR] Built: " .. def.id .. " (" .. boneCount .. " bones)")
+end
+
+local function attachCurrentWeapon()
+    if weaponIdx == 0 then return end
+    local wname = WEAPON_NAMES[weaponIdx]
+    local w = Weapons[wname]
+    if not (w and skelInst) then return end
+
+    Skeleton.AttachWeapon(skelInst, w, "handR")
+
+    -- 加载武器图集
+    local weaponPath = "Textures/items_weapons.png"
+    if not atlasImages[weaponPath] then
+        atlasImages[weaponPath] = nvgCreateImage(vg, weaponPath, 0)
+        print("[NVG] Created weapon atlas: " .. weaponPath .. " -> " .. tostring(atlasImages[weaponPath]))
+    end
+    currentWeaponAtlasImage = atlasImages[weaponPath]
+    currentWeaponAtlasRects = ATLAS_RECTS.weapons
 end
 
 local function cycleCharacter()
     charIndex = charIndex % #CHARACTERS + 1
     buildCharacter(charIndex)
-    print("[CHAR] -> " .. CHARACTERS[charIndex].id)
 end
 
 local function cycleWeapon()
     weaponIdx = (weaponIdx + 1) % (#WEAPON_NAMES + 1)
     if skelInst then Skeleton.DetachWeapon(skelInst) end
-    if boneNodes then SpriteBE.DetachPart(boneNodes, "weapon") end
     if weaponIdx > 0 then
         attachCurrentWeapon()
         print("[WEAPON] -> " .. WEAPON_NAMES[weaponIdx])
     else
+        currentWeaponAtlasImage = 0
+        currentWeaponAtlasRects = nil
         print("[WEAPON] -> none")
     end
 end
 
-local function setupNanoVG()
-    vg = nvgCreate(1)
-    if not vg then
-        print("[WARN] NanoVG context unavailable; debug overlay disabled")
-        return
-    end
-    fontId = nvgCreateFont(vg, "sans", "Fonts/MiSans-Regular.ttf")
-end
-
-local function worldToScreen(wx, wy)
-    local gfx = GetGraphics()
-    local cam = cameraNode:GetComponent("Camera")
-    local viewH = cam.orthoSize
-    local viewW = viewH * gfx:GetWidth() / gfx:GetHeight()
-    local sx = (wx - cameraNode.position.x) / viewW * gfx:GetWidth()  + gfx:GetWidth()  * 0.5
-    local sy = -(wy - cameraNode.position.y) / viewH * gfx:GetHeight() + gfx:GetHeight() * 0.5
-    return sx, sy
-end
+-- ============================================================================
+-- HUD 绘制
+-- ============================================================================
 
 local function drawJointsOverlay()
-    if not vg or not skelInst or not boneNodes then return end
-    local invPPM = 1 / PIXELS_PER_METER
+    if not vg or not skelInst then return end
+    local gfx = GetGraphics()
+    local cx = gfx:GetWidth() * 0.5 + charScreenX
+    local cy = gfx:GetHeight() * 0.6 + charScreenY
+
     nvgBeginPath(vg)
-    for name, _ in pairs(boneNodes) do
-        local p = skelInst.parts[name]
-        if p and p.wx then
-            local cx = charNode.position2D.x + facing * (p.wx * invPPM)
-            local cy = charNode.position2D.y - (p.wy * invPPM)
-            local sx, sy = worldToScreen(cx, cy)
-            nvgCircle(vg, sx, sy, 3)
+    for name, p in pairs(skelInst.parts) do
+        if p.wx ~= nil then
+            local jx = cx + facing * p.wx * charScale
+            local jy = cy + p.wy * charScale
+            nvgCircle(vg, jx, jy, 3)
         end
     end
     nvgFillColor(vg, nvgRGBA(255, 80, 80, 220))
@@ -232,7 +361,7 @@ local function drawHUD()
 
     nvgFontSize(vg, 18)
     nvgFillColor(vg, nvgRGBA(255, 220, 100, 255))
-    nvgText(vg, 20, 18, "skeleton2d / StaticSprite2D Demo", nil)
+    nvgText(vg, 20, 18, "skeleton2d / NanoVG Demo", nil)
 
     nvgFontSize(vg, 14)
     nvgFillColor(vg, nvgRGBA(220, 230, 255, 255))
@@ -242,7 +371,6 @@ local function drawHUD()
     local wname = (weaponIdx == 0) and "(none)" or WEAPON_NAMES[weaponIdx]
     nvgText(vg, 20, y, "Weapon:  " .. wname,                     nil); y = y + lh
     nvgText(vg, 20, y, "Facing:  " .. (facing == 1 and "Right" or "Left"), nil); y = y + lh
-    nvgText(vg, 20, y, string.format("Pos:     (%.2f, %.2f) m", charX, charY), nil); y = y + lh
     nvgText(vg, 20, y, "Bones:   " .. tostring(boneCount),       nil); y = y + lh
 
     nvgFontSize(vg, 12)
@@ -250,33 +378,52 @@ local function drawHUD()
     nvgText(vg, 20, y + 6, "[1-5] Anim [A/D] Move [F] Flip [C] Char [W] Weapon [J/H] Overlay", nil)
 end
 
+-- ============================================================================
+-- 生命周期
+-- ============================================================================
+
 function Start()
     SampleStart()
     SampleInitMouseMode(MM_FREE)
 
-    setupScene()
-
-    buildCharacter(charIndex)
-    setupNanoVG()
-
-    SubscribeToEvent("Update", "HandleUpdate")
-    if vg then
-        SubscribeToEvent(vg, "NanoVGRender", "HandleNanoVGRender")
+    -- 创建 NanoVG 上下文
+    vg = nvgCreate(1)
+    if not vg then
+        print("[ERROR] Failed to create NanoVG context")
+        return
     end
+    fontId = nvgCreateFont(vg, "sans", "Fonts/MiSans-Regular.ttf")
 
-    print("=== skeleton2d StaticSprite2D Demo ===")
+    -- 构建角色
+    buildCharacter(charIndex)
+
+    -- 订阅事件
+    SubscribeToEvent("Update", "HandleUpdate")
+    SubscribeToEvent(vg, "NanoVGRender", "HandleNanoVGRender")
+
+    print("=== skeleton2d NanoVG Demo ===")
     print("[1-5] Anim  [A/D] Move  [F] Flip  [C] Char  [W] Weapon  [J/H] Overlay")
 end
 
 function Stop()
-    if vg then nvgDelete(vg); vg = nil end
-    destroyCharacter()
+    -- 删除 NanoVG 图片
+    if vg then
+        for path, handle in pairs(atlasImages) do
+            nvgDeleteImage(vg, handle)
+        end
+        atlasImages = {}
+        nvgDelete(vg)
+        vg = nil
+    end
 end
 
+---@param eventType string
+---@param eventData UpdateEventData
 function HandleUpdate(eventType, eventData)
     local dt = eventData["TimeStep"]:GetFloat()
     local Anims = CHARACTERS[charIndex].animations
 
+    -- 动画切换
     for i = 1, #animNames do
         if input:GetKeyPress(KEY_1 + (i - 1)) then
             local a = Anims[animNames[i]]
@@ -292,9 +439,10 @@ function HandleUpdate(eventType, eventData)
     if input:GetKeyPress(KEY_C) then cycleCharacter() end
     if input:GetKeyPress(KEY_W) then cycleWeapon() end
 
+    -- 移动
     local moving = false
-    if input:GetKeyDown(KEY_A) then charX = charX - moveSpeed * dt; facing = -1; moving = true end
-    if input:GetKeyDown(KEY_D) then charX = charX + moveSpeed * dt; facing =  1; moving = true end
+    if input:GetKeyDown(KEY_A) then charScreenX = charScreenX - moveSpeed * dt; facing = -1; moving = true end
+    if input:GetKeyDown(KEY_D) then charScreenX = charScreenX + moveSpeed * dt; facing =  1; moving = true end
 
     if moving and currentAnim == "idle" and Anims.walk then
         currentAnim = "walk"; Skeleton.Play(skelInst, Anims.walk, { loop = true })
@@ -310,19 +458,26 @@ function HandleUpdate(eventType, eventData)
     if input:GetKeyPress(KEY_J) then showJoints = not showJoints end
     if input:GetKeyPress(KEY_H) then showHUD    = not showHUD end
 
+    -- 更新骨骼动画
     Skeleton.Update(skelInst, dt)
     Skeleton.UpdateWorldTransforms(skelInst)
-    SpriteBE.Sync(boneNodes, skelInst, { pixelsPerMeter = PIXELS_PER_METER })
-
-    charNode.position2D = Vector2(charX, charY)
-    spriteRoot:SetScale2D(Vector2(facing, 1))
 end
 
 function HandleNanoVGRender(eventType, eventData)
     if not vg then return end
     local gfx = GetGraphics()
-    nvgBeginFrame(vg, gfx:GetWidth(), gfx:GetHeight(), 1.0)
+    local screenW, screenH = gfx:GetWidth(), gfx:GetHeight()
+
+    nvgBeginFrame(vg, screenW, screenH, 1.0)
+
+    -- 绘制角色：屏幕中心偏下
+    local cx = screenW * 0.5 + charScreenX
+    local cy = screenH * 0.6 + charScreenY
+    drawSkeletonNanoVG(skelInst, cx, cy, facing, charScale)
+
+    -- 叠加层
     if showJoints then drawJointsOverlay() end
     if showHUD    then drawHUD() end
+
     nvgEndFrame(vg)
 end
