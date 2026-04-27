@@ -1,451 +1,264 @@
 -- ============================================================================
--- skeleton2d 技术验证 Demo
--- 验证: SkeletonRenderer + NanoVG 后端 在 UrhoX 中的完整运行
+-- skeleton2d StaticSprite2D Demo (TapTap Maker / UrhoX)
 --
--- 部署方式: 在 scripts/ 中创建符号链接指向仓库源文件，
--- 不复制任何 SkeletonRenderer / skeleton / animations 副本。
+-- 本 demo 演示 skeleton2d 在 UrhoX 中的 **场景图渲染通路**：
+--   - 每个骨骼部件 = 一个子 Node + StaticSprite2D 组件（一次性创建）
+--   - 每帧 Skeleton.UpdateWorldTransforms 算出 wx/wy/wr，
+--     再由 backends/taptap_sprite 同步到 node.position2D / rotation2D
 --
--- 需要的符号链接（相对于 scripts/ 目录）:
---   SkeletonRenderer.lua  → ../../../runtime/lua/SkeletonRenderer.lua
---   humanoid/skeleton.lua → ../../../../examples/humanoid/skeleton.lua
---   humanoid/animations.lua → ../../../../examples/humanoid/animations.lua
+-- 部署：scripts/ 下三个符号链接 + backends/ 子目录的一个符号链接
+--   SkeletonRenderer.lua          → ../../../runtime/lua/SkeletonRenderer.lua
+--   backends/taptap_sprite.lua    → ../../../../runtime/lua/backends/taptap_sprite.lua
+--   humanoid/skeleton.lua         → ../../../../examples/humanoid/skeleton.lua
+--   humanoid/animations.lua       → ../../../../examples/humanoid/animations.lua
+--
+-- 贴图：humanoid 示例数据未指定 png（仅 placeholderColor），所以默认看不见
+-- 任何精灵；NanoVG 覆盖层会画关节点+连线让你确认骨骼是真的在动。
+-- 接入真实贴图：在 examples/humanoid/skeleton.json 里给每个 part 加 png
+-- 字段，然后用 editor 重新导出 lua；并把 PNG 放到 Textures/ 下即可。
 -- ============================================================================
 
 require "LuaScripts/Utilities/Sample"
 
--- skeleton2d 运行时（通过符号链接指向仓库唯一源: runtime/lua/SkeletonRenderer.lua）
 local Skeleton = require "SkeletonRenderer"
--- 编辑器导出数据（通过符号链接指向仓库唯一源: examples/humanoid/{skeleton,animations}.lua）
+local SpriteBE = require "backends.taptap_sprite"
 local SkelDef  = require "humanoid.skeleton"
 local Anims    = require "humanoid.animations"
 
 -- ============================================================================
--- 全局状态
+-- 状态
 -- ============================================================================
-local vg = nil           -- NanoVG 上下文
-local fontId = -1        -- 字体句柄
+local PIXELS_PER_METER = 100  -- skeleton2d 像素 ↔ UrhoX 米
 
----@type table
-local skelInst = nil     -- 骨骼实例
+local scene_      = nil
+local cameraNode  = nil
+local charNode    = nil   -- 角色根节点（位置 + 朝向）
+local spriteRoot  = nil   -- 部件容器（朝向翻转作用在它身上）
+local skelInst    = nil
+local boneNodes   = nil   -- partName → Node
+local boneCount   = 0     -- 部件数量（用于 HUD）
+
+local vg          = nil
+local fontId      = -1
+
 local currentAnim = "idle"
-local facing = 1         -- 1=朝右, -1=朝左
-local drawScale = 2.5    -- 绘制缩放
-local showDebug = true   -- 显示调试信息
-local showBones = false  -- 显示骨骼关节点
+local animNames   = { "idle", "walk", "swing", "shoot", "hit" }
+local facing      = 1
 
--- 动画列表（用于循环切换）
-local animNames = { "idle", "walk", "swing", "shoot", "hit" }
-local animIndex = 1
-
--- 角色位置（屏幕坐标）
+-- 角色位置（米；2D 场景坐标，Y 向上）
 local charX = 0
-local charY = 0
-local moveSpeed = 150   -- 像素/秒
+local charY = -1.5
+local moveSpeed = 1.5  -- m/s
+
+local showJoints = true
+local showHUD    = true
 
 -- ============================================================================
--- NanoVG 后端适配层
+-- 初始化场景
+-- 注：以下是标准 Urho3D 2D 场景搭建 API；TapTap (UrhoX) 大概率一致，
+-- 若引擎对 Scene/Camera/Viewport 有定制（例如默认已存在 scene），
+-- 把 setupScene() 替换成获取现有 scene 即可，下游逻辑不需要改。
 -- ============================================================================
-local function setupNanoVGBackend()
-    Skeleton.SetBackend({
-        drawImage = function(handle, x, y, w, h)
-            -- 暂无贴图，后续扩展
-        end,
+local function setupScene()
+    scene_ = Scene()
+    scene_:CreateComponent("Octree")
+    scene_:CreateComponent("DebugRenderer")
 
-        fillRect = function(x, y, w, h, rgba)
-            nvgBeginPath(vg)
-            nvgRect(vg, x, y, w, h)
-            local r = rgba[1] or 200
-            local g = rgba[2] or 100
-            local b = rgba[3] or 100
-            local a = rgba[4] or 220
-            nvgFillColor(vg, nvgRGBA(r, g, b, a))
-            nvgFill(vg)
-        end,
+    -- 2D 正交相机
+    cameraNode = scene_:CreateChild("Camera")
+    cameraNode.position = Vector3(0, 0, -10)
+    local camera = cameraNode:CreateComponent("Camera")
+    camera.orthographic = true
+    -- orthoSize = 视口高度（米）；6m 高 ≈ 角色高度的 4 倍，便于观察
+    camera.orthoSize = 6.0
 
-        getImage = function(path)
-            return nil  -- 占位模式，全部使用 placeholderColor
-        end,
+    local viewport = Viewport:new(scene_, camera)
+    renderer:SetViewport(0, viewport)
+end
 
-        enqueueImage = function(path)
-            -- 占位模式，无需加载
-        end,
+local function setupCharacter()
+    charNode   = scene_:CreateChild("Character")
+    spriteRoot = charNode:CreateChild("SpriteRoot")
 
-        pushTransform = function()
-            nvgSave(vg)
-        end,
+    skelInst = Skeleton.New(SkelDef)
+    Skeleton.Play(skelInst, Anims.idle, { loop = true })
 
-        popTransform = function()
-            nvgRestore(vg)
-        end,
-
-        translate = function(x, y)
-            nvgTranslate(vg, x, y)
-        end,
-
-        rotate = function(rad)
-            nvgRotate(vg, rad)
-        end,
-
-        scale = function(sx, sy)
-            nvgScale(vg, sx, sy)
-        end,
+    boneNodes = SpriteBE.CreateNodes(spriteRoot, skelInst, {
+        cache            = cache,
+        texturePrefix    = "Textures/",
+        pixelsPerMeter   = PIXELS_PER_METER,
+        baseOrderInLayer = 0,
     })
+
+    boneCount = 0
+    for _ in pairs(boneNodes) do boneCount = boneCount + 1 end
 end
 
 -- ============================================================================
--- 绘制辅助
+-- NanoVG 调试覆盖层（仅可视化骨骼，不参与渲染管线）
 -- ============================================================================
-
---- 绘制背景网格
-local function drawGrid(ctx, w, h)
-    local gridSize = 40
-    nvgBeginPath(ctx)
-    nvgStrokeColor(ctx, nvgRGBA(255, 255, 255, 15))
-    nvgStrokeWidth(ctx, 1)
-    for x = 0, w, gridSize do
-        nvgMoveTo(ctx, x, 0)
-        nvgLineTo(ctx, x, h)
+local function setupNanoVG()
+    vg = nvgCreate(1)
+    if not vg then
+        print("[WARN] NanoVG context unavailable; debug overlay disabled")
+        return
     end
-    for y = 0, h, gridSize do
-        nvgMoveTo(ctx, 0, y)
-        nvgLineTo(ctx, w, y)
-    end
-    nvgStroke(ctx)
+    fontId = nvgCreateFont(vg, "sans", "Fonts/MiSans-Regular.ttf")
 end
 
---- 绘制地面参考线
-local function drawGroundLine(ctx, w, groundY)
-    nvgBeginPath(ctx)
-    nvgMoveTo(ctx, 0, groundY)
-    nvgLineTo(ctx, w, groundY)
-    nvgStrokeColor(ctx, nvgRGBA(100, 200, 100, 80))
-    nvgStrokeWidth(ctx, 2)
-    nvgStroke(ctx)
-
-    -- 地面标注
-    nvgFontFaceId(ctx, fontId)
-    nvgFontSize(ctx, 12)
-    nvgTextAlign(ctx, NVG_ALIGN_LEFT + NVG_ALIGN_BOTTOM)
-    nvgFillColor(ctx, nvgRGBA(100, 200, 100, 120))
-    nvgText(ctx, 8, groundY - 4, "Ground", nil)
+-- 把 2D 世界坐标（米）投影成屏幕像素，用于 NanoVG 覆盖层
+local function worldToScreen(wx, wy)
+    local gfx = GetGraphics()
+    local cam = cameraNode:GetComponent("Camera")
+    -- 简化：正交相机居中、无旋转
+    local viewH = cam.orthoSize
+    local viewW = viewH * gfx:GetWidth() / gfx:GetHeight()
+    local sx = (wx - cameraNode.position.x) / viewW * gfx:GetWidth()  + gfx:GetWidth()  * 0.5
+    local sy = -(wy - cameraNode.position.y) / viewH * gfx:GetHeight() + gfx:GetHeight() * 0.5
+    return sx, sy
 end
 
---- 绘制骨骼关节调试点（递归遍历骨骼树）
-local function drawBoneJoints(ctx, inst, name, worldX, worldY, worldRot, scale)
-    local p = inst.parts[name]
-    if not p then return end
+local function drawJointsOverlay()
+    if not vg or not boneNodes then return end
+    local invPPM = 1 / PIXELS_PER_METER
 
-    local ax = p.attachAt[1] * scale
-    local ay = p.attachAt[2] * scale
-    local rad = math.rad(worldRot + (p.currentRot or 0))
-    local cosR = math.cos(rad)
-    local sinR = math.sin(rad)
-
-    -- 当前关节在世界坐标中的位置
-    local jx = worldX + ax * cosR - ay * sinR
-    local jy = worldY + ax * sinR + ay * cosR
-
-    -- 画关节点（红色）
-    nvgBeginPath(ctx)
-    nvgCircle(ctx, jx, jy, 3)
-    nvgFillColor(ctx, nvgRGBA(255, 60, 60, 200))
-    nvgFill(ctx)
-
-    -- 画连线
-    nvgBeginPath(ctx)
-    nvgMoveTo(ctx, worldX, worldY)
-    nvgLineTo(ctx, jx, jy)
-    nvgStrokeColor(ctx, nvgRGBA(255, 255, 0, 100))
-    nvgStrokeWidth(ctx, 1)
-    nvgStroke(ctx)
-
-    -- 递归子节点
-    local kids = inst.children[name]
-    if kids then
-        for i = 1, #kids do
-            drawBoneJoints(ctx, inst, kids[i], jx, jy, worldRot + (p.currentRot or 0), scale)
+    nvgBeginPath(vg)
+    for name, node in pairs(boneNodes) do
+        local p = skelInst.parts[name]
+        if p and p.wx then
+            -- 部件锚点在世界中的位置（米）
+            local cx = charNode.position2D.x + facing * (p.wx * invPPM)
+            local cy = charNode.position2D.y - (p.wy * invPPM)  -- skeleton2d Y 向下
+            local sx, sy = worldToScreen(cx, cy)
+            nvgCircle(vg, sx, sy, 3)
         end
     end
+    nvgFillColor(vg, nvgRGBA(255, 80, 80, 220))
+    nvgFill(vg)
 end
 
---- 绘制 HUD 信息面板
-local function drawHUD(ctx, w, h)
-    -- 半透明背景
-    nvgBeginPath(ctx)
-    nvgRoundedRect(ctx, 10, 10, 280, 210, 8)
-    nvgFillColor(ctx, nvgRGBA(0, 0, 0, 180))
-    nvgFill(ctx)
+local function drawHUD()
+    if not vg then return end
+    local gfx = GetGraphics()
 
-    nvgFontFaceId(ctx, fontId)
-    nvgTextAlign(ctx, NVG_ALIGN_LEFT + NVG_ALIGN_TOP)
+    nvgBeginPath(vg)
+    nvgRoundedRect(vg, 10, 10, 300, 180, 8)
+    nvgFillColor(vg, nvgRGBA(0, 0, 0, 180))
+    nvgFill(vg)
 
-    -- 标题
-    nvgFontSize(ctx, 18)
-    nvgFillColor(ctx, nvgRGBA(255, 220, 100, 255))
-    nvgText(ctx, 20, 18, "skeleton2d Tech Demo", nil)
+    if fontId >= 0 then nvgFontFaceId(vg, fontId) end
+    nvgTextAlign(vg, NVG_ALIGN_LEFT + NVG_ALIGN_TOP)
 
-    -- 分隔线
-    nvgBeginPath(ctx)
-    nvgMoveTo(ctx, 20, 42)
-    nvgLineTo(ctx, 280, 42)
-    nvgStrokeColor(ctx, nvgRGBA(255, 255, 255, 40))
-    nvgStrokeWidth(ctx, 1)
-    nvgStroke(ctx)
+    nvgFontSize(vg, 18)
+    nvgFillColor(vg, nvgRGBA(255, 220, 100, 255))
+    nvgText(vg, 20, 18, "skeleton2d / StaticSprite2D Demo", nil)
 
-    nvgFontSize(ctx, 14)
-    local y = 52
-    local lineH = 22
+    nvgFontSize(vg, 14)
+    nvgFillColor(vg, nvgRGBA(220, 230, 255, 255))
+    local y = 46
+    local lh = 20
+    nvgText(vg, 20, y, "Anim:    " .. currentAnim, nil); y = y + lh
+    nvgText(vg, 20, y, "Facing:  " .. (facing == 1 and "Right" or "Left"), nil); y = y + lh
+    nvgText(vg, 20, y, string.format("Pos:     (%.2f, %.2f) m", charX, charY), nil); y = y + lh
+    nvgText(vg, 20, y, "Bones:   " .. tostring(boneCount) .. " StaticSprite2D nodes", nil); y = y + lh
+    nvgText(vg, 20, y, "Joints:  " .. (showJoints and "ON" or "OFF"), nil); y = y + lh
 
-    -- 当前动画
-    nvgFillColor(ctx, nvgRGBA(180, 220, 255, 255))
-    nvgText(ctx, 20, y, "Animation: " .. currentAnim, nil)
-    y = y + lineH
-
-    -- 朝向
-    local facingStr = facing == 1 and "Right →" or "← Left"
-    nvgText(ctx, 20, y, "Facing: " .. facingStr, nil)
-    y = y + lineH
-
-    -- 缩放
-    nvgText(ctx, 20, y, string.format("Scale: %.1fx", drawScale), nil)
-    y = y + lineH
-
-    -- 调试开关
-    nvgText(ctx, 20, y, "Bones: " .. (showBones and "ON" or "OFF"), nil)
-    y = y + lineH
-
-    -- 分隔线
-    nvgBeginPath(ctx)
-    nvgMoveTo(ctx, 20, y + 2)
-    nvgLineTo(ctx, 280, y + 2)
-    nvgStrokeColor(ctx, nvgRGBA(255, 255, 255, 40))
-    nvgStrokeWidth(ctx, 1)
-    nvgStroke(ctx)
-    y = y + 10
-
-    -- 操作提示
-    nvgFontSize(ctx, 12)
-    nvgFillColor(ctx, nvgRGBA(160, 160, 180, 200))
-    nvgText(ctx, 20, y, "[1-5] Switch Anim  [A/D] Move  [F] Flip", nil)
-    y = y + 18
-    nvgText(ctx, 20, y, "[+/-] Scale  [B] Bones  [H] HUD", nil)
-end
-
---- 绘制动画按钮栏
-local function drawAnimBar(ctx, w, h)
-    local barH = 40
-    local barY = h - barH - 10
-    local btnW = 80
-    local totalW = #animNames * (btnW + 8) - 8
-    local startX = (w - totalW) / 2
-
-    for i, name in ipairs(animNames) do
-        local bx = startX + (i - 1) * (btnW + 8)
-        local isActive = (name == currentAnim)
-
-        -- 按钮背景
-        nvgBeginPath(ctx)
-        nvgRoundedRect(ctx, bx, barY, btnW, barH, 6)
-        if isActive then
-            nvgFillColor(ctx, nvgRGBA(60, 120, 220, 220))
-        else
-            nvgFillColor(ctx, nvgRGBA(50, 55, 70, 180))
-        end
-        nvgFill(ctx)
-
-        -- 边框
-        nvgStrokeColor(ctx, nvgRGBA(120, 140, 180, isActive and 200 or 80))
-        nvgStrokeWidth(ctx, 1)
-        nvgStroke(ctx)
-
-        -- 文字
-        nvgFontFaceId(ctx, fontId)
-        nvgFontSize(ctx, 14)
-        nvgTextAlign(ctx, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
-        nvgFillColor(ctx, nvgRGBA(255, 255, 255, isActive and 255 or 160))
-        nvgText(ctx, bx + btnW / 2, barY + barH / 2, name, nil)
-
-        -- 快捷键提示
-        nvgFontSize(ctx, 10)
-        nvgFillColor(ctx, nvgRGBA(200, 200, 200, 100))
-        nvgText(ctx, bx + btnW / 2, barY - 8, tostring(i), nil)
-    end
+    nvgFontSize(vg, 12)
+    nvgFillColor(vg, nvgRGBA(160, 160, 180, 200))
+    nvgText(vg, 20, y + 6, "[1-5] Anim  [A/D] Move  [F] Flip  [J] Joints  [H] HUD", nil)
 end
 
 -- ============================================================================
 -- 生命周期
 -- ============================================================================
-
 function Start()
     SampleStart()
     SampleInitMouseMode(MM_FREE)
 
-    -- 创建 NanoVG 上下文
-    vg = nvgCreate(1)
-    if not vg then
-        print("[ERROR] Failed to create NanoVG context")
-        return
-    end
+    setupScene()
+    setupCharacter()
+    setupNanoVG()
 
-    -- 加载字体（只调用一次）
-    fontId = nvgCreateFont(vg, "sans", "Fonts/MiSans-Regular.ttf")
-    if fontId == -1 then
-        print("[ERROR] Failed to load font")
-    end
-
-    -- 初始化 NanoVG 后端
-    setupNanoVGBackend()
-
-    -- 创建骨骼实例并播放 idle 动画
-    skelInst = Skeleton.New(SkelDef)
-    Skeleton.Play(skelInst, Anims.idle, { loop = true })
-
-    -- 初始位置（屏幕中央）
-    local gfx = GetGraphics()
-    charX = gfx:GetWidth() / 2
-    charY = gfx:GetHeight() * 0.7
-
-    -- 订阅事件
     SubscribeToEvent("Update", "HandleUpdate")
-    SubscribeToEvent(vg, "NanoVGRender", "HandleNanoVGRender")
+    if vg then
+        SubscribeToEvent(vg, "NanoVGRender", "HandleNanoVGRender")
+    end
 
-    print("=== skeleton2d Tech Demo Started ===")
+    print("=== skeleton2d StaticSprite2D Demo ===")
     print("[1-5] Switch animation  [A/D] Move  [F] Flip facing")
-    print("[+/-] Scale  [B] Toggle bones  [H] Toggle HUD")
+    print("[J] Toggle joint overlay  [H] Toggle HUD")
 end
 
 function Stop()
-    if vg then
-        nvgDelete(vg)
-        vg = nil
-    end
+    if vg then nvgDelete(vg); vg = nil end
+    if boneNodes then SpriteBE.Destroy(boneNodes); boneNodes = nil end
 end
 
 -- ============================================================================
--- 更新逻辑
+-- 每帧
 -- ============================================================================
-
----@param eventType string
----@param eventData UpdateEventData
 function HandleUpdate(eventType, eventData)
     local dt = eventData["TimeStep"]:GetFloat()
 
     -- 动画切换 (1-5)
     for i = 1, #animNames do
-        local key = KEY_1 + (i - 1)
-        if input:GetKeyPress(key) then
-            animIndex = i
+        if input:GetKeyPress(KEY_1 + (i - 1)) then
             currentAnim = animNames[i]
-            local anim = Anims[currentAnim]
-            if anim then
-                Skeleton.Play(skelInst, anim, { loop = anim.loop, restart = true })
+            local a = Anims[currentAnim]
+            if a then
+                Skeleton.Play(skelInst, a, { loop = a.loop, restart = true })
                 print("[ANIM] → " .. currentAnim)
             end
         end
     end
 
-    -- 朝向翻转 (F)
-    if input:GetKeyPress(KEY_F) then
-        facing = facing * -1
-        print("[FACING] → " .. (facing == 1 and "Right" or "Left"))
-    end
+    -- 朝向翻转
+    if input:GetKeyPress(KEY_F) then facing = -facing end
 
-    -- 移动 (A/D)
+    -- 移动
     local moving = false
-    if input:GetKeyDown(KEY_A) then
-        charX = charX - moveSpeed * dt
-        facing = -1
-        moving = true
-    end
-    if input:GetKeyDown(KEY_D) then
-        charX = charX + moveSpeed * dt
-        facing = 1
-        moving = true
-    end
+    if input:GetKeyDown(KEY_A) then charX = charX - moveSpeed * dt; facing = -1; moving = true end
+    if input:GetKeyDown(KEY_D) then charX = charX + moveSpeed * dt; facing =  1; moving = true end
 
-    -- 自动切换行走/待机动画
+    -- 行走/待机自动切换
     if moving and currentAnim == "idle" then
-        currentAnim = "walk"
-        animIndex = 2
-        Skeleton.Play(skelInst, Anims.walk, { loop = true })
+        currentAnim = "walk"; Skeleton.Play(skelInst, Anims.walk, { loop = true })
     elseif not moving and currentAnim == "walk" then
-        currentAnim = "idle"
-        animIndex = 1
-        Skeleton.Play(skelInst, Anims.idle, { loop = true })
+        currentAnim = "idle"; Skeleton.Play(skelInst, Anims.idle, { loop = true })
     end
 
-    -- 非循环动画播完后回到 idle
-    if skelInst.finished and not Anims[currentAnim].loop then
+    -- 一次性动画播完回 idle
+    if skelInst.finished and Anims[currentAnim] and not Anims[currentAnim].loop then
         currentAnim = "idle"
-        animIndex = 1
         Skeleton.Play(skelInst, Anims.idle, { loop = true })
-    end
-
-    -- 缩放 (+/-)
-    if input:GetKeyPress(KEY_KP_PLUS) or input:GetKeyPress(KEY_EQUALS) then
-        drawScale = math.min(drawScale + 0.5, 6.0)
-        print("[SCALE] → " .. string.format("%.1f", drawScale))
-    end
-    if input:GetKeyPress(KEY_KP_MINUS) or input:GetKeyPress(KEY_MINUS) then
-        drawScale = math.max(drawScale - 0.5, 0.5)
-        print("[SCALE] → " .. string.format("%.1f", drawScale))
     end
 
     -- 调试开关
-    if input:GetKeyPress(KEY_B) then
-        showBones = not showBones
-    end
-    if input:GetKeyPress(KEY_H) then
-        showDebug = not showDebug
-    end
+    if input:GetKeyPress(KEY_J) then showJoints = not showJoints end
+    if input:GetKeyPress(KEY_H) then showHUD    = not showHUD end
 
-    -- 更新骨骼动画
+    -- 1) 推动画
     Skeleton.Update(skelInst, dt)
+    -- 2) 算世界变换
+    Skeleton.UpdateWorldTransforms(skelInst)
+    -- 3) 同步到节点
+    SpriteBE.Sync(boneNodes, skelInst, { pixelsPerMeter = PIXELS_PER_METER })
+
+    -- 角色位置 + 朝向（作用在 charNode / spriteRoot）
+    charNode.position2D = Vector2(charX, charY)
+    spriteRoot:SetScale2D(Vector2(facing, 1))
 end
 
 -- ============================================================================
--- 渲染
+-- NanoVG 覆盖层（仅调试可视化）
 -- ============================================================================
-
 function HandleNanoVGRender(eventType, eventData)
-    if not vg or not skelInst then return end
-
+    if not vg then return end
     local gfx = GetGraphics()
-    local w = gfx:GetWidth()
-    local h = gfx:GetHeight()
+    nvgBeginFrame(vg, gfx:GetWidth(), gfx:GetHeight(), 1.0)
 
-    nvgBeginFrame(vg, w, h, 1.0)
-
-    -- 背景
-    nvgBeginPath(vg)
-    nvgRect(vg, 0, 0, w, h)
-    local bg = nvgLinearGradient(vg, 0, 0, 0, h,
-        nvgRGBA(25, 30, 45, 255),
-        nvgRGBA(15, 18, 28, 255))
-    nvgFillPaint(vg, bg)
-    nvgFill(vg)
-
-    -- 网格
-    drawGrid(vg, w, h)
-
-    -- 地面线
-    drawGroundLine(vg, w, charY)
-
-    -- 绘制骨骼角色
-    Skeleton.Draw(skelInst, charX, charY, facing, drawScale)
-
-    -- 骨骼关节调试
-    if showBones then
-        drawBoneJoints(vg, skelInst, skelInst.rootName, charX, charY, 0, drawScale)
-    end
-
-    -- HUD
-    if showDebug then
-        drawHUD(vg, w, h)
-    end
-
-    -- 底部动画按钮栏
-    drawAnimBar(vg, w, h)
+    if showJoints then drawJointsOverlay() end
+    if showHUD    then drawHUD() end
 
     nvgEndFrame(vg)
 end
