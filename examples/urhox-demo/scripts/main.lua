@@ -1,14 +1,26 @@
 -- ============================================================================
 -- skeleton2d 技术验证 Demo
 -- 验证: SkeletonRenderer + NanoVG 后端 在 UrhoX 中的完整运行
+--
+-- 本文件直接 require 仓库根的 runtime 和 examples 数据，
+-- 不复制任何 SkeletonRenderer / skeleton / animations 副本。
 -- ============================================================================
 
 require "LuaScripts/Utilities/Sample"
 
--- skeleton2d 运行时和数据
-local Skeleton = require "skeleton2d.runtime.lua.SkeletonRenderer"
-local SkelDef  = require "skeleton2d.data.humanoid_skeleton"
-local Anims    = require "skeleton2d.data.humanoid_animations"
+-- 把仓库根的 runtime/lua/ 和 examples/ 加入搜索路径
+-- SCRIPT_ROOT = 当前脚本所在目录 (examples/urhox-demo/scripts/)
+-- 向上三级即为仓库根
+local ROOT = SCRIPT_ROOT .. "/../../.."
+package.path = package.path
+    .. ";" .. ROOT .. "/runtime/lua/?.lua"
+    .. ";" .. ROOT .. "/examples/?.lua"
+
+-- skeleton2d 运行时（仓库唯一源: runtime/lua/SkeletonRenderer.lua）
+local Skeleton = require "SkeletonRenderer"
+-- 编辑器导出数据（仓库唯一源: examples/humanoid/{skeleton,animations}.lua）
+local SkelDef  = require "humanoid.skeleton"
+local Anims    = require "humanoid.animations"
 
 -- ============================================================================
 -- 全局状态
