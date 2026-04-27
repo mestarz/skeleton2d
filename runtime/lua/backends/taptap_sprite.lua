@@ -42,6 +42,10 @@ local DEFAULT_OPTS = {
     texturePrefix    = "",
     baseOrderInLayer = 0,
     blendMode        = nil,   -- 默认 BLEND_ALPHA（若全局可用）
+    -- 图集模式（3 个字段需同时提供）：
+    atlasPath        = nil,   -- string: 图集 PNG 资源路径
+    atlasRects       = nil,   -- table: { partName = { x, y, w, h }, ... } 像素坐标
+    atlasSize        = nil,   -- table: { w, h } 图集整体尺寸（用于归一化）
 }
 
 local function mergeOpts(opts)
@@ -68,12 +72,30 @@ function M.CreateNodes(parentNode, skeletonInst, opts)
     local ppm   = o.pixelsPerMeter
     local invPPM = 1 / ppm
 
+    -- 图集模式：预加载图集 Sprite2D（所有部件共享同一张贴图）
+    local atlasSprite = nil
+    local atlasW, atlasH = 1, 1
+    if o.atlasPath and o.atlasRects and o.atlasSize then
+        atlasSprite = cache and cache:GetResource("Sprite2D", o.atlasPath)
+        atlasW = o.atlasSize.w
+        atlasH = o.atlasSize.h
+    end
+
     local boneNodes = {}
     for name, p in pairs(skeletonInst.parts) do
         local node = parentNode:CreateChild(name)
 
         local sprite = node:CreateComponent("StaticSprite2D")
-        if p.png and cache then
+        if atlasSprite and o.atlasRects[name] then
+            -- 图集模式：共用同一张 Sprite2D，用 textureRect 选择子区域
+            sprite.sprite = atlasSprite
+            local r = o.atlasRects[name]
+            sprite.useTextureRect = true
+            sprite.textureRect = Rect(
+                r.x / atlasW, r.y / atlasH,
+                (r.x + r.w) / atlasW, (r.y + r.h) / atlasH
+            )
+        elseif p.png and cache then
             local res = cache:GetResource("Sprite2D", o.texturePrefix .. p.png)
             if res then sprite.sprite = res end
         end

@@ -6,18 +6,7 @@
 --   - 每帧 Skeleton.UpdateWorldTransforms 算出 wx/wy/wr，
 --     再由 backends/taptap_sprite 同步到 node.position2D / rotation2D
 --
--- 数据：
---   police_m   男警察（14 骨）  Textures/police_m/parts/*.png
---   civilian_f 女平民（14 骨）  Textures/civilian_f/parts/*.png
---   weapons    handgun / knife  Textures/weapons/*.png
---
--- 部署：scripts/ 下符号链接（git 提交，引擎运行时按文件读取）：
---   SkeletonRenderer.lua          → ../../../runtime/lua/SkeletonRenderer.lua
---   backends/taptap_sprite.lua    → ../../../../runtime/lua/backends/taptap_sprite.lua
---   police_m/skeleton.lua         (本地生成)
---   police_m/animations.lua       → ../../../humanoid/animations.lua
---   civilian_f/skeleton.lua       (本地生成)
---   civilian_f/animations.lua     → ../../../humanoid/animations.lua
+-- 贴图使用图集模式（SpriteSheet2D）：每个角色 14 张部件图合为 1 张图集。
 -- ============================================================================
 
 require "LuaScripts/Utilities/Sample"
@@ -26,13 +15,59 @@ local Skeleton = require "SkeletonRenderer"
 local SpriteBE = require "backends.taptap_sprite"
 local Weapons  = require "weapons"
 
+-- 图集子区域定义（由 Python 打包脚本生成，网格布局，2的幂次方尺寸）
+local ATLAS_RECTS = {
+    police_m = {  -- atlas: 512x1024, cell=120x140, grid=4x4
+        torso     = { x =   0, y =   0, w = 100, h = 140 },
+        head      = { x = 120, y =   0, w = 120, h = 135 },
+        upperArmL = { x = 240, y =   0, w =  40, h =  80 },
+        upperArmR = { x = 360, y =   0, w =  45, h =  80 },
+        lowerArmL = { x =   0, y = 140, w =  45, h =  70 },
+        lowerArmR = { x = 120, y = 140, w =  50, h =  70 },
+        handL     = { x = 240, y = 140, w =  40, h =  30 },
+        handR     = { x = 360, y = 140, w =  45, h =  35 },
+        thighL    = { x =   0, y = 280, w =  45, h = 110 },
+        thighR    = { x = 120, y = 280, w =  45, h = 110 },
+        shinL     = { x = 240, y = 280, w =  45, h =  90 },
+        shinR     = { x = 360, y = 280, w =  45, h =  90 },
+        footL     = { x =   0, y = 420, w =  55, h =  35 },
+        footR     = { x = 120, y = 420, w =  55, h =  35 },
+    },
+    civilian_f = {  -- atlas: 512x1024, cell=120x138, grid=4x4
+        torso     = { x =   0, y =   0, w =  98, h = 138 },
+        head      = { x = 120, y =   0, w = 120, h = 138 },
+        upperArmL = { x = 240, y =   0, w =  45, h =  75 },
+        upperArmR = { x = 360, y =   0, w =  50, h =  75 },
+        lowerArmL = { x =   0, y = 138, w =  45, h =  70 },
+        lowerArmR = { x = 120, y = 138, w =  50, h =  70 },
+        handL     = { x = 240, y = 138, w =  35, h =  35 },
+        handR     = { x = 360, y = 138, w =  40, h =  35 },
+        thighL    = { x =   0, y = 276, w =  45, h = 105 },
+        thighR    = { x = 120, y = 276, w =  45, h = 105 },
+        shinL     = { x = 240, y = 276, w =  45, h =  95 },
+        shinR     = { x = 360, y = 276, w =  45, h =  95 },
+        footL     = { x =   0, y = 414, w =  55, h =  40 },
+        footR     = { x = 120, y = 414, w =  55, h =  40 },
+    },
+    weapons = {  -- atlas: 256x128, cell=118x111, grid=2x1
+        handgun = { x =   0, y = 0, w = 118, h =  84 },
+        knife   = { x = 118, y = 0, w = 106, h = 111 },
+    },
+}
+
 local CHARACTERS = {
     { id = "police_m",
       skeleton   = require "police_m.skeleton",
-      animations = require "police_m.animations" },
+      animations = require "police_m.animations",
+      atlasPng   = "Textures/police_m_atlas.png",
+      atlasRects = ATLAS_RECTS.police_m,
+      atlasSize  = { w = 512, h = 1024 } },
     { id = "civilian_f",
       skeleton   = require "civilian_f.skeleton",
-      animations = require "civilian_f.animations" },
+      animations = require "civilian_f.animations",
+      atlasPng   = "Textures/civilian_f_atlas.png",
+      atlasRects = ATLAS_RECTS.civilian_f,
+      atlasSize  = { w = 512, h = 1024 } },
 }
 
 local WEAPON_NAMES = { "handgun", "knife" }
@@ -84,14 +119,22 @@ local function destroyCharacter()
     skelInst, boneCount = nil, 0
 end
 
+local WEAPONS_ATLAS_SIZE = { w = 256, h = 128 }
+
 local function attachCurrentWeapon()
     if weaponIdx == 0 then return end
     local w = Weapons[WEAPON_NAMES[weaponIdx]]
     if not (w and skelInst and boneNodes and spriteRoot) then return end
+
     Skeleton.AttachWeapon(skelInst, w, "handR")
+
+    -- 武器图集：把当前武器的子区域以 "weapon" 为键传入，后端按 partName 查找
+    local weaponRects = { weapon = ATLAS_RECTS.weapons[WEAPON_NAMES[weaponIdx]] }
+
     SpriteBE.AttachPart(boneNodes, spriteRoot, skelInst, "weapon", {
-        cache            = cache,
-        texturePrefix    = "Textures/",
+        atlasPath        = "Textures/weapons_atlas.png",
+        atlasRects       = weaponRects,
+        atlasSize        = WEAPONS_ATLAS_SIZE,
         pixelsPerMeter   = PIXELS_PER_METER,
         baseOrderInLayer = 0,
     })
@@ -108,9 +151,11 @@ local function buildCharacter(idx)
     local first = def.animations[currentAnim] or def.animations.idle
     if first then Skeleton.Play(skelInst, first, { loop = first.loop ~= false }) end
 
+    -- 图集模式：传图集路径 + 子区域坐标，后端用 textureRect 选择子区域
     boneNodes = SpriteBE.CreateNodes(spriteRoot, skelInst, {
-        cache            = cache,
-        texturePrefix    = "Textures/",
+        atlasPath        = def.atlasPng,
+        atlasRects       = def.atlasRects,
+        atlasSize        = def.atlasSize,
         pixelsPerMeter   = PIXELS_PER_METER,
         baseOrderInLayer = 0,
     })
