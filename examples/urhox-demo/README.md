@@ -26,9 +26,11 @@
 
 | 按键 | 功能 |
 |---|---|
-| 1–5 | 切换动画 |
+| 1–5 | 切换动画（idle / walk / swing / shoot / hit） |
 | A / D | 左右移动（自动切 walk/idle） |
 | F | 翻转朝向 |
+| C | 切换角色（police_m / civilian_f） |
+| W | 切换武器（无 / handgun / knife） |
 | J | 显示/隐藏关节调试点 |
 | H | 显示/隐藏 HUD |
 
@@ -37,40 +39,50 @@
 ```
 examples/urhox-demo/
 ├── README.md
+├── Textures/                              ← 拷贝到 TapTap 项目 Resources/Data/Textures/
+│   ├── police_m/parts/*.png               14 张部件
+│   ├── civilian_f/parts/*.png             14 张部件
+│   └── weapons/{handgun,knife}.png
 └── scripts/
-    ├── main.lua                      ← demo 入口
-    ├── SkeletonRenderer.lua          ─symlink─→ ../../../runtime/lua/SkeletonRenderer.lua
+    ├── main.lua                           ← demo 入口
+    ├── weapons.lua                        ← 武器定义（grip 锚点）
+    ├── SkeletonRenderer.lua               ─symlink─→ ../../../runtime/lua/SkeletonRenderer.lua
     ├── backends/
-    │   └── taptap_sprite.lua         ─symlink─→ ../../../../runtime/lua/backends/taptap_sprite.lua
-    └── humanoid/
-        ├── skeleton.lua              ─symlink─→ ../../../../examples/humanoid/skeleton.lua
-        └── animations.lua            ─symlink─→ ../../../../examples/humanoid/animations.lua
-```
-
-`main.lua` 通过符号链接引用仓库唯一源文件，不维护副本、不修改 `package.path`：
-
-```lua
-local Skeleton = require "SkeletonRenderer"        -- → runtime/lua/SkeletonRenderer.lua
-local SpriteBE = require "backends.taptap_sprite"  -- → runtime/lua/backends/taptap_sprite.lua
-local SkelDef  = require "humanoid.skeleton"       -- → examples/humanoid/skeleton.lua
-local Anims    = require "humanoid.animations"     -- → examples/humanoid/animations.lua
+    │   └── taptap_sprite.lua              ─symlink─→ ../../../../runtime/lua/backends/taptap_sprite.lua
+    ├── police_m/
+    │   ├── skeleton.lua                   (本地生成)
+    │   └── animations.lua                 ─symlink─→ ../../../humanoid/animations.lua
+    └── civilian_f/
+        ├── skeleton.lua                   (本地生成)
+        └── animations.lua                 ─symlink─→ ../../../humanoid/animations.lua
 ```
 
 > UrhoX 沙箱不允许 `package.path` 指向 `scripts/` 之外的目录；symlink 让模块在
 > 文件系统层完成跳转，沙箱 stat 出来仍然落在 `scripts/` 内部。
+>
+> `animations.lua` 用符号链接共享 `examples/humanoid/animations.lua` ——
+> 两个角色都是 14 骨人形，骨骼名字完全一致，可以共用动画轨道。
 
-## 关于贴图
+## 数据生成管线
 
-`examples/humanoid/` 是只带几何信息的占位骨骼，**没有指定 PNG**，所以默认运行
-看到的是空场景 + 红色关节点 + HUD。用法演示和坐标管线都是真实的，只是没有可见
-的精灵。接入真实贴图：
+`Textures/<id>/parts/*.png` 与 `Textures/<id>/skeleton.json` 由仓库根的工具生成：
 
-1. 在 `examples/humanoid/skeleton.json` 里给每个 part 加 `"png": "torso.png"` 等字段
-2. 用 `editor/` 重新导出 lua（或直接编辑生成的 lua）
-3. 把对应 PNG 放到 TapTap 项目的 `Textures/` 下（可在 demo 中改 `texturePrefix` 选项）
+```bash
+# 1) 拆分原图（按 bbox 配置裁剪 14 个部件 + 写 skeleton.json）
+python3 tools/split_character.py tools/configs/police_m.json
+python3 tools/split_character.py tools/configs/civilian_f.json
 
-`backends/taptap_sprite.lua` 在 part 没有 `png` 字段或资源加载失败时不会报错，
-只是该部件的 sprite 为空，节点和变换照常工作。
+# 2) （可选）重组预览，目视校验 anchor / attachAt 是否合理
+python3 tools/preview_skeleton.py examples/urhox-demo/Textures/police_m/skeleton.json
+python3 tools/preview_skeleton.py examples/urhox-demo/Textures/civilian_f/skeleton.json
+
+# 3) 转成运行期 Lua
+node tools/json2lua.js examples/urhox-demo/Textures/police_m/skeleton.json   examples/urhox-demo/scripts/police_m/skeleton.lua
+node tools/json2lua.js examples/urhox-demo/Textures/civilian_f/skeleton.json examples/urhox-demo/scripts/civilian_f/skeleton.lua
+```
+
+要换原图，编辑 `tools/configs/<id>.json`（bbox / anchor / attachAt / parent / z）后
+重跑步骤 1–3 即可。
 
 ## 与 NanoVG 通路的对比
 

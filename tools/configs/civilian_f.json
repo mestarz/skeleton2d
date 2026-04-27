@@ -1,0 +1,43 @@
+{
+  "id": "civilian_f",
+  "source": "../../../BaiSiYeShou/assets/characters/female/civilian_f_1_idle/frame_01.png",
+  "out_dir": "../../examples/urhox-demo/Textures/civilian_f",
+  "out_textures_subdir": "parts",
+  "root": "torso",
+  "_landmarks_in_source_px": {
+    "neck":         [128, 150],
+    "shoulder_L":   [100, 168],
+    "shoulder_R":   [160, 168],
+    "elbow_L":      [90,  235],
+    "elbow_R":      [170, 235],
+    "wrist_L":      [85,  295],
+    "wrist_R":      [175, 295],
+    "hip_center":   [128, 285],
+    "hip_L":        [115, 285],
+    "hip_R":        [142, 285],
+    "knee_L":       [115, 375],
+    "knee_R":       [142, 375],
+    "ankle_L":      [110, 460],
+    "ankle_R":      [148, 460]
+  },
+  "parts": {
+    "torso":     { "bbox": [80, 150,  98, 138], "anchor": [48, 135], "attachAt": [0, 0],    "z": 0,  "parent": null     },
+    "head":      { "bbox": [70,  20, 120, 138], "anchor": [58, 130], "attachAt": [48, 0],   "z": 1,  "parent": "torso"  },
+
+    "upperArmL": { "bbox": [60, 165,  45,  75], "anchor": [40,   3], "attachAt": [20, 18],  "z": 2,  "parent": "torso"  },
+    "lowerArmL": { "bbox": [60, 235,  45,  70], "anchor": [30,   0], "attachAt": [30, 70],  "z": 2,  "parent": "upperArmL" },
+    "handL":     { "bbox": [70, 295,  35,  35], "anchor": [15,   0], "attachAt": [25, 60],  "z": 2,  "parent": "lowerArmL" },
+
+    "upperArmR": { "bbox": [155, 165, 50,  75], "anchor": [ 5,   3], "attachAt": [80, 18],  "z": 2,  "parent": "torso"  },
+    "lowerArmR": { "bbox": [155, 235, 50,  70], "anchor": [15,   0], "attachAt": [15, 70],  "z": 2,  "parent": "upperArmR" },
+    "handR":     { "bbox": [160, 295, 40,  35], "anchor": [15,   0], "attachAt": [20, 60],  "z": 2,  "parent": "lowerArmR" },
+
+    "thighL":    { "bbox": [ 95, 275, 45, 105], "anchor": [20,  10], "attachAt": [35, 135], "z": -2, "parent": "torso"  },
+    "shinL":     { "bbox": [ 95, 370, 45,  95], "anchor": [20,   5], "attachAt": [20, 100], "z": -2, "parent": "thighL" },
+    "footL":     { "bbox": [ 85, 455, 55,  40], "anchor": [25,   5], "attachAt": [20,  90], "z": -2, "parent": "shinL"  },
+
+    "thighR":    { "bbox": [125, 275, 45, 105], "anchor": [17,  10], "attachAt": [62, 135], "z": -2, "parent": "torso"  },
+    "shinR":     { "bbox": [125, 370, 45,  95], "anchor": [17,   5], "attachAt": [17, 100], "z": -2, "parent": "thighR" },
+    "footR":     { "bbox": [120, 455, 55,  40], "anchor": [28,   5], "attachAt": [22,  90], "z": -2, "parent": "shinR"  }
+  }
+}
