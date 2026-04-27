@@ -1,12 +1,12 @@
 -- ============================================================================
 -- skeleton2d NanoVG Demo (TapTap Maker / UrhoX)
 --
--- 演示 skeleton2d 使用 NanoVG 渲染路径：
---   - 用 nvgCreateImage 加载图集纹理
---   - 用 Skeleton.Draw() + NanoVG 后端绘制骨骼
---   - 图集子区域通过 nvgImagePattern 偏移实现裁切
+-- 演示 skeleton2d 在 NanoVG immediate-mode 下绘制：
+--   - 用 nvgCreateImage 加载图集纹理（每张 atlas 一次）
+--   - SkeletonRenderer 只负责动画 + 世界变换递推
+--   - 自己遍历 skelInst.parts，用 nvgImagePattern 在 part.wx/wy/wr 处画子区域
 --
--- UrhoX WebGL 环境中 StaticSprite2D 不可用，所有 2D 游戏均使用 NanoVG。
+-- UrhoX WebGL 中 StaticSprite2D 不可用，所有 2D 游戏均使用 NanoVG。
 -- ============================================================================
 
 require "LuaScripts/Utilities/Sample"
@@ -99,7 +99,7 @@ local showJoints = true
 local showHUD    = true
 
 -- ============================================================================
--- NanoVG 图集后端（给 Skeleton.Draw() 用）
+-- NanoVG 图集绘制
 -- ============================================================================
 
 -- 当前角色使用的图集信息
@@ -162,70 +162,11 @@ local function drawAtlasRegion(partName, x, y, w, h)
     nvgFill(vg)
 end
 
---- 给 SkeletonRenderer.SetBackend 使用的后端
-local function createNanoVGBackend()
-    return {
-        drawImage = function(handle, x, y, w, h)
-            -- handle 在这里是 partName（字符串）
-            drawAtlasRegion(handle, x, y, w, h)
-        end,
-        fillRect = function(x, y, w, h, rgba)
-            if not vg then return end
-            nvgBeginPath(vg)
-            nvgRect(vg, x, y, w, h)
-            nvgFillColor(vg, nvgRGBA(rgba[1] or 200, rgba[2] or 100, rgba[3] or 100, rgba[4] or 220))
-            nvgFill(vg)
-        end,
-        getImage = function(path)
-            -- 返回 partName 作为 handle（非 nil/0 即表示"已加载"）
-            -- 我们需要从 path 反查 partName
-            -- 但 SkeletonRenderer.Draw 传入的 path 是 skeleton def 中的 png 字段
-            -- 而我们用图集渲染，需要把 png path 映射到 partName
-            -- 实际上 Draw() 里的 name 变量就是 partName
-            -- 但 backend.getImage 接收的是 p.png 路径...
-            -- 我们返回路径本身作为 handle，然后在 drawImage 中再映射
-            if path then return path end
-            return nil
-        end,
-        enqueueImage = function(path) end,
-        pushTransform = function()
-            if vg then nvgSave(vg) end
-        end,
-        popTransform = function()
-            if vg then nvgRestore(vg) end
-        end,
-        translate = function(x, y)
-            if vg then nvgTranslate(vg, x, y) end
-        end,
-        rotate = function(rad)
-            if vg then nvgRotate(vg, rad) end
-        end,
-        scale = function(sx, sy)
-            if vg then nvgScale(vg, sx, sy) end
-        end,
-    }
-end
-
 -- ============================================================================
 -- 骨骼管理
 -- ============================================================================
 
--- 由于 Skeleton.Draw() 中 backend.getImage 传入的是 p.png 路径，
--- 而 backend.drawImage 传入的是 getImage 返回的 handle（=path），
--- 我们需要在 drawImage 中从 path 反查 partName。
--- 为此，建立 png -> partName 的映射。
-local pngToPartName = {}
-
-local function buildPngMap(skeletonDef)
-    pngToPartName = {}
-    for name, p in pairs(skeletonDef.parts) do
-        if p.png then
-            pngToPartName[p.png] = name
-        end
-    end
-end
-
---- 不用 Skeleton.Draw()，改为自己遍历绘制（这样能直接用 partName 查图集）
+--- 自己遍历 inst.parts 绘制：每个 part 用 nvgImagePattern 画图集子区域
 local function drawSkeletonNanoVG(inst, sx, sy, fac, sc)
     if not vg or not inst then return end
 

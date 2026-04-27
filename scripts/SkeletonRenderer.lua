@@ -1,50 +1,23 @@
 -- ============================================================
 -- skeleton2d / SkeletonRenderer.lua
 -- ------------------------------------------------------------
--- 极简 2D 纸娃娃骨骼渲染器（无 NanoVG/Renderer 强依赖）。
+-- 极简 2D 纸娃娃骨骼运行时（数据 + 动画 + 世界变换递推）。
 --
--- 用法：
---   local Skeleton = require "skeleton2d.runtime.lua.SkeletonRenderer"
---   Skeleton.SetBackend({
---       drawImage = function(handle, x, y, w, h) end,
---       fillRect  = function(x, y, w, h, rgba) end,
---       getImage  = function(path) return handle end,   -- 同步返回，缺失返回 nil/0
---       enqueueImage = function(path) end,              -- 异步加载（可选，缺失则跳过）
---       pushTransform = function() end,
---       popTransform  = function() end,
---       translate = function(x, y) end,
---       rotate    = function(rad) end,
---       scale     = function(sx, sy) end,
---   })
+-- 渲染策略：本模块**不做绘制**。它只负责：
+--   1. New(def)                 — 解析骨骼定义、建父子关系
+--   2. Play / Update            — 关键帧采样、写每个 part 的 currentRot
+--   3. UpdateWorldTransforms    — 把 currentRot 递推成 part.wx / wy / wr
+--   4. AttachWeapon / DetachWeapon — 动态挂点（武器、帽子等）
 --
---   local inst = Skeleton.New(skeletonDef)   -- skeletonDef 来自 JSON 或等价 Lua 表
---   Skeleton.Play(inst, anims.swing, { loop = false })
---   -- per frame:
---   Skeleton.Update(inst, dt)
---   Skeleton.Draw(inst, x, y, facing, scale)
+-- 调用方（主循环）每帧：
+--     Skeleton.Update(inst, dt)
+--     Skeleton.UpdateWorldTransforms(inst)
+--     -- 然后自己用 NanoVG 遍历 inst.parts 绘制
+--
+-- 渲染参考：scripts/main.lua 中 drawSkeletonNanoVG()。
 -- ============================================================
 
 local Skeleton = {}
-
--- ---------- 后端接口 ----------
-local backend = nil
-
-local function noop() end
-local function noop_get() return nil end
-
-function Skeleton.SetBackend(be)
-    backend = {
-        drawImage     = be.drawImage     or noop,
-        fillRect      = be.fillRect      or noop,
-        getImage      = be.getImage      or noop_get,
-        enqueueImage  = be.enqueueImage  or noop,
-        pushTransform = be.pushTransform or noop,
-        popTransform  = be.popTransform  or noop,
-        translate     = be.translate     or noop,
-        rotate        = be.rotate        or noop,
-        scale         = be.scale         or noop,
-    }
-end
 
 -- ---------- 关键帧线性插值 ----------
 local function sampleTrack(track, phase)
@@ -83,7 +56,7 @@ end
 local function pt(v, default)
     if not v then return { default[1], default[2] } end
     if v.x ~= nil then return { v.x, v.y } end
-    return { v[1] or default[1], v[2] or default[2] } 
+    return { v[1] or default[1], v[2] or default[2] }
 end
 
 -- ---------- 公共 API ----------
@@ -167,11 +140,10 @@ function Skeleton.Update(inst, dt)
     applyAnimation(inst, anim, inst.phase)
 end
 
--- ---------- 世界变换递推（场景图后端用） ----------
--- 与 Draw() 互不依赖：不需要 backend，也不依赖变换栈。
+-- ---------- 世界变换递推 ----------
 -- 调用后每个 part 都拥有 wx, wy, wr 三个字段，单位为像素 / 度，
 -- **相对于骨骼根节点**（不含角色级 facing / 位置 / 缩放）。
--- 角色级变换由调用方通过外部容器节点（spriteRoot）施加。
+-- 角色级变换由调用方在绘制时施加（NanoVG 用 nvgTranslate / nvgScale）。
 local function recurseWorld(inst, name, px, py, pr)
     local p = inst.parts[name]
     if not p then return end
@@ -192,68 +164,6 @@ end
 function Skeleton.UpdateWorldTransforms(inst)
     if inst.rootName then
         recurseWorld(inst, inst.rootName, 0, 0, 0)
-    end
-end
-
-local function drawTree(inst, name, be)
-    local p = inst.parts[name]
-    if not p then return end
-    be.pushTransform()
-    be.translate(p.attachAt[1], p.attachAt[2])
-    be.rotate(math.rad(p.currentRot or 0))
-
-    -- 画自己
-    be.pushTransform()
-    be.translate(-p.anchor[1], -p.anchor[2])
-    if p.png then
-        local handle = be.getImage(p.png)
-        if handle and handle ~= 0 then
-            be.drawImage(handle, 0, 0, p.w, p.h)
-        else
-            be.enqueueImage(p.png)
-            be.fillRect(0, 0, p.w, p.h, p.placeholderColor)
-        end
-    else
-        be.fillRect(0, 0, p.w, p.h, p.placeholderColor)
-    end
-    be.popTransform()
-
-    -- 递归画子节点
-    local kids = inst.children[name]
-    if kids then
-        for i = 1, #kids do
-            drawTree(inst, kids[i], be)
-        end
-    end
-
-    be.popTransform()
-end
-
-function Skeleton.Draw(inst, x, y, facing, scale)
-    local be = backend
-    if not be then error("Skeleton.SetBackend(...) must be called first") end
-    facing = facing or 1
-    scale  = scale or 1.0
-
-    be.pushTransform()
-    be.translate(x, y)
-    if facing < 0 then
-        be.scale(-scale, scale)
-    elseif scale ~= 1 then
-        be.scale(scale, scale)
-    end
-
-    if inst.rootName then
-        drawTree(inst, inst.rootName, be)
-    end
-
-    be.popTransform()
-end
-
-function Skeleton.Preload(inst)
-    if not backend then return end
-    for _, p in pairs(inst.parts) do
-        if p.png then backend.enqueueImage(p.png) end
     end
 end
 

@@ -1,5 +1,5 @@
--- Weapon defs for the StaticSprite2D demo.
--- 配合 Skeleton.AttachWeapon + SpriteBE.AttachPart 使用。
+-- Weapon defs for the NanoVG demo.
+-- 配合 Skeleton.AttachWeapon 使用，绘制由 main.lua 的 NanoVG 主循环完成。
 --
 -- 字段:
 --   png       贴图相对 Textures/ 路径

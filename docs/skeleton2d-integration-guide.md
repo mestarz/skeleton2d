@@ -1,654 +1,332 @@
-# 轻量级骨骼系统对接指南 — TapTap Maker (UrhoX)
+# 轻量级骨骼系统对接指南 — TapTap Maker (UrhoX) / NanoVG
 
-> 本文档提供在 UrhoX 引擎中实现和对接轻量级 2D 骨骼动画系统的完整示例。
-> 包含两种渲染方案（Sprite 节点 / NanoVG）以及碰撞解耦、部件管理等最佳实践。
+> 本仓库**只针对 NanoVG immediate-mode 渲染**做集成。
+> StaticSprite2D / Scene-graph 路径在 UrhoX WebGL 不可用，
+> 历史方案已从代码与文档中移除（见 `docs/taptap-integration-pitfalls.md` §7）。
 
 ---
 
 ## 目录
 
 1. [核心概念](#1-核心概念)
-2. [方案一：StaticSprite2D 节点渲染（推荐）](#2-方案一staticsprite2d-节点渲染推荐)
-3. [方案二：NanoVG 渲染](#3-方案二nanovg-渲染)
-4. [骨骼 Runtime 核心实现](#4-骨骼-runtime-核心实现)
-5. [碰撞与动画解耦](#5-碰撞与动画解耦)
-6. [程序化动画驱动](#6-程序化动画驱动)
-7. [帧动画 vs 骨骼动画混用](#7-帧动画-vs-骨骼动画混用)
-8. [API 速查](#8-api-速查)
+2. [NanoVG 渲染管线](#2-nanovg-渲染管线)
+3. [骨骼 Runtime 使用](#3-骨骼-runtime-使用)
+4. [程序化动画驱动](#4-程序化动画驱动)
+5. [图集（Atlas）打包约定](#5-图集atlas打包约定)
+6. [API 速查](#6-api-速查)
 
 ---
 
 ## 1. 核心概念
 
-### 骨骼系统的三层架构
+### 三层架构
 
 ```
-┌─────────────────────────────────┐
-│  驱动层（动画数据 / 程序化控制）    │  ← 输入：旋转角度、位移
-├─────────────────────────────────┤
-│  Runtime 层（变换递推）            │  ← 核心：local → world transform
-├─────────────────────────────────┤
-│  渲染层（Sprite 节点 / NanoVG）   │  ← 输出：把图画在正确位置
-└─────────────────────────────────┘
+┌─────────────────────────────────────┐
+│  驱动层（关键帧动画 / 程序化控制）       │  ← 设置 part.currentRot 或调 Skeleton.Play
+├─────────────────────────────────────┤
+│  Runtime 层（变换递推）                │  ← Skeleton.Update + UpdateWorldTransforms
+├─────────────────────────────────────┤
+│  渲染层（NanoVG immediate-mode）      │  ← 自己遍历 inst.parts，nvgImagePattern 画图集子区域
+└─────────────────────────────────────┘
 ```
 
 ### 数据流
 
 ```
-骨骼定义 (table)
-    ↓
-每帧更新 bone.rotation / bone.x / bone.y（驱动层）
-    ↓
-递推计算 bone.wx, bone.wy, bone.wr（runtime 层）
-    ↓
-写到渲染目标（渲染层）
-    ├── node.position2D = Vector2(wx, wy)     ← Sprite 方案
-    └── nvgTranslate(vg, wx, wy)              ← NanoVG 方案
+skeleton.json / .lua (table)
+      ↓ Skeleton.New(def)
+inst.parts[*]  含 parent / attachAt / anchor / png / w / h / restRot / z
+      ↓ Skeleton.Play(inst, anim) + Skeleton.Update(inst, dt)
+inst.parts[*].currentRot
+      ↓ Skeleton.UpdateWorldTransforms(inst)
+inst.parts[*].wx / wy / wr     ← 像素坐标 + 度，相对骨骼根
+      ↓ 主循环每帧 nvgSave/Translate/Rotate + nvgImagePattern + nvgFill
+屏幕
 ```
+
+> Runtime 不做绘制，也不持有 NanoVG 上下文；它只把骨骼树折算成"每个 part 的世界变换"。
+> 这套抽象的好处是 runtime 可以在编辑器（JS / Canvas）和游戏（Lua / NanoVG）之间复用。
 
 ---
 
-## 2. 方案一：StaticSprite2D 节点渲染（推荐）
+## 2. NanoVG 渲染管线
 
-适用于需要物理碰撞、场景交互的游戏。
-
-### 2.1 加载单张部件图
+### 2.1 初始化
 
 ```lua
--- 创建一个骨骼部件节点
-local armNode = parentNode:CreateChild("arm_left")
-
--- 添加 StaticSprite2D 组件
-local sprite = armNode:CreateComponent("StaticSprite2D")
-
--- 加载贴图（路径相对于 assets/）
-sprite.sprite = cache:GetResource("Sprite2D", "Textures/arm_left.png")
-
--- 设置混合模式（带透明通道的 PNG）
-sprite.blendMode = BLEND_ALPHA
-
--- 设置锚点（关节旋转中心）
--- (0.5, 0.5) = 图片中心
--- (0.5, 0.0) = 图片顶部中心（手臂上端为肩关节）
--- (0.5, 1.0) = 图片底部中心
-sprite.useHotSpot = true
-sprite.hotSpot = Vector2(0.5, 0.0)  -- 肩部为旋转中心
-
--- 设置绘制层级（数字越大越靠前）
-sprite.orderInLayer = 5
-```
-
-### 2.2 设置节点变换
-
-```lua
--- 2D 位置（单位：米）
-armNode.position2D = Vector2(0.3, 1.2)
-
--- 2D 旋转（单位：度，逆时针为正）
-armNode.rotation2D = -15.0
-
--- 2D 缩放
-armNode:SetScale2D(Vector2(1.0, 1.0))
-
--- 翻转（角色转向）
-sprite.flipX = true   -- 水平翻转
-sprite.flipY = false  -- 垂直翻转
-```
-
-### 2.3 自定义绘制尺寸
-
-```lua
--- 默认按贴图原始尺寸（像素 → 引擎单位，100px = 1米）
--- 如果需要自定义大小：
-sprite.useDrawRect = true
-sprite.drawRect = Rect(-0.3, -0.8, 0.3, 0.0)  -- left, bottom, right, top（米）
--- 这会将图片绘制在 0.6m 宽、0.8m 高的矩形内
-```
-
-### 2.4 局部纹理区域（图集切割）
-
-```lua
--- 只显示贴图的一部分（UV 坐标，0~1 范围）
-sprite.useTextureRect = true
-sprite.textureRect = Rect(0.0, 0.0, 0.5, 1.0)  -- 只显示左半部分
-```
-
-### 2.5 颜色和透明度
-
-```lua
--- 整体着色
-sprite.color = Color(1.0, 0.8, 0.8, 1.0)  -- 略偏红
-
--- 单独设置透明度
-sprite.alpha = 0.7
-```
-
-### 2.6 完整部件角色组装示例
-
-```lua
---- 创建一个由多个 Sprite 部件组成的骨骼角色
----@param scene Scene
----@param position Vector2 角色位置
----@return Node characterNode 角色根节点
-function CreateSkeletonCharacter(scene, position)
-    -- 角色根节点
-    local charNode = scene:CreateChild("Character")
-    charNode.position2D = position
-
-    -- 骨骼视觉根节点（和碰撞体解耦）
-    local spriteRoot = charNode:CreateChild("SpriteRoot")
-
-    -- 部件定义：name, 贴图路径, 锚点, 偏移, 层级
-    local parts = {
-        { name = "leg_l",  tex = "Parts/leg.png",   hotSpot = Vector2(0.5, 0.0), offset = Vector2(-0.15, 0.0),  order = 1 },
-        { name = "leg_r",  tex = "Parts/leg.png",   hotSpot = Vector2(0.5, 0.0), offset = Vector2(0.15, 0.0),   order = 1 },
-        { name = "torso",  tex = "Parts/torso.png", hotSpot = Vector2(0.5, 0.0), offset = Vector2(0.0, 0.4),    order = 2 },
-        { name = "arm_l",  tex = "Parts/arm.png",   hotSpot = Vector2(0.5, 0.0), offset = Vector2(-0.25, 0.9),  order = 1 },
-        { name = "arm_r",  tex = "Parts/arm.png",   hotSpot = Vector2(0.5, 0.0), offset = Vector2(0.25, 0.9),   order = 3 },
-        { name = "head",   tex = "Parts/head.png",  hotSpot = Vector2(0.5, 0.2), offset = Vector2(0.0, 1.2),    order = 4 },
-    }
-
-    ---@type table<string, Node>
-    local boneNodes = {}
-
-    for _, part in ipairs(parts) do
-        local node = spriteRoot:CreateChild(part.name)
-        node.position2D = part.offset
-
-        local spr = node:CreateComponent("StaticSprite2D")
-        spr.sprite = cache:GetResource("Sprite2D", part.tex)
-        spr.blendMode = BLEND_ALPHA
-        spr.useHotSpot = true
-        spr.hotSpot = part.hotSpot
-        spr.orderInLayer = part.order
-
-        boneNodes[part.name] = node
-    end
-
-    return charNode, boneNodes
-end
-```
-
----
-
-## 3. 方案二：NanoVG 渲染
-
-适用于纯 2D 渲染、不需要物理碰撞的场景。
-
-### 3.1 加载图片
-
-```lua
-local vg = nil
-local images = {}
+local vg
+local atlasImages = {}      -- key: 图集相对路径, value: nvg image handle
 
 function Start()
     vg = nvgCreate(0)
-
-    -- 加载部件图片（返回 image handle）
-    images.head  = nvgCreateImage(vg, "Parts/head.png", 0)
-    images.torso = nvgCreateImage(vg, "Parts/torso.png", 0)
-    images.arm   = nvgCreateImage(vg, "Parts/arm.png", 0)
-    images.leg   = nvgCreateImage(vg, "Parts/leg.png", 0)
-
     SubscribeToEvent("NanoVGRender", "HandleNanoVGRender")
+end
+
+local function loadAtlas(path)
+    if not atlasImages[path] then
+        atlasImages[path] = nvgCreateImage(vg, path, 0)
+    end
+    return atlasImages[path]
 end
 ```
 
-### 3.2 绘制单个部件
+### 2.2 绘制图集子区域
+
+> 这是接 atlas 的核心套路。NanoVG 没有"画 sub-rect"的直接 API，
+> 我们用 `nvgImagePattern` 把整张图集"虚拟放大 + 反向偏移"，
+> 让目标子区域恰好对齐到 `nvgRect` 的位置。
 
 ```lua
---- 在指定位置和旋转下绘制一个部件图
----@param vg userdata NanoVG context
----@param img number image handle
----@param x number 世界坐标 X
----@param y number 世界坐标 Y
----@param rotation number 旋转角度（度）
----@param pivotX number 锚点 X（像素，相对于图片左上角）
----@param pivotY number 锚点 Y（像素，相对于图片左上角）
----@param w number 图片宽度（像素）
----@param h number 图片高度（像素）
-function DrawPart(vg, img, x, y, rotation, pivotX, pivotY, w, h)
-    nvgSave(vg)
+--- 在 (x, y, w, h) 处绘制图集 atlas 中的子区域 rect
+---@param atlasHandle number nvgCreateImage 返回值
+---@param rect table { x, y, w, h }   像素坐标，Y 向下
+---@param x number 目标位置（屏幕/局部坐标）
+---@param y number
+---@param w number 目标宽度
+---@param h number 目标高度
+local function drawAtlasRegion(atlasHandle, rect, x, y, w, h)
+    local atlasW, atlasH = nvgImageSize(vg, atlasHandle)
 
-    -- 移动到世界位置
-    nvgTranslate(vg, x, y)
-    -- 旋转（NanoVG 用弧度）
-    nvgRotate(vg, math.rad(rotation))
-    -- 偏移锚点（让旋转中心在关节位置）
-    nvgTranslate(vg, -pivotX, -pivotY)
+    local scaleX = w / rect.w
+    local scaleY = h / rect.h
+    local patW   = atlasW * scaleX
+    local patH   = atlasH * scaleY
+    local ox     = x - rect.x * scaleX
+    local oy     = y - rect.y * scaleY
 
-    -- 绘制图片
-    local paint = nvgImagePattern(vg, 0, 0, w, h, 0, img, 1.0)
+    local paint = nvgImagePattern(vg, ox, oy, patW, patH, 0, atlasHandle, 1.0)
     nvgBeginPath(vg)
-    nvgRect(vg, 0, 0, w, h)
+    nvgRect(vg, x, y, w, h)
     nvgFillPaint(vg, paint)
     nvgFill(vg)
+end
+```
+
+### 2.3 绘制整个骨骼
+
+```lua
+--- @param inst   骨骼实例（Skeleton.New 的返回值）
+--- @param sx,sy  屏幕位置（像素）
+--- @param facing 1 或 -1（用于水平镜像）
+--- @param sc     缩放
+local function drawSkeleton(inst, atlasHandle, atlasRects, sx, sy, facing, sc)
+    nvgSave(vg)
+    nvgTranslate(vg, sx, sy)
+    if facing < 0 then nvgScale(vg, -sc, sc) else nvgScale(vg, sc, sc) end
+
+    -- 收集所有 part 按 z 升序绘制
+    local sorted = {}
+    for name, p in pairs(inst.parts) do
+        if p.wx ~= nil then sorted[#sorted + 1] = { name = name, p = p } end
+    end
+    table.sort(sorted, function(a, b) return a.p.z < b.p.z end)
+
+    for _, item in ipairs(sorted) do
+        local name, p = item.name, item.p
+        local rect = atlasRects[name]
+        if rect then
+            nvgSave(vg)
+            nvgTranslate(vg, p.wx, p.wy)
+            nvgRotate(vg, math.rad(p.wr or 0))
+            nvgTranslate(vg, -p.anchor[1], -p.anchor[2])
+            drawAtlasRegion(atlasHandle, rect, 0, 0, p.w, p.h)
+            nvgRestore(vg)
+        end
+    end
 
     nvgRestore(vg)
 end
 ```
 
-### 3.3 完整渲染回调
+### 2.4 渲染回调
 
 ```lua
 function HandleNanoVGRender(eventType, eventData)
-    local w = graphics:GetWidth()
-    local h = graphics:GetHeight()
-    local dpr = graphics:GetDPR()
+    local W, H, dpr = graphics:GetWidth(), graphics:GetHeight(), graphics:GetDPR()
+    nvgBeginFrame(vg, W / dpr, H / dpr, dpr)
 
-    nvgBeginFrame(vg, w / dpr, h / dpr, dpr)
-
-    -- 按层级顺序绘制（先画的在后面）
-    -- 假设 bones 是 runtime 算好的世界变换
-    DrawPart(vg, images.leg,   bones.leg_l.wx, bones.leg_l.wy, bones.leg_l.wr, 16, 0, 32, 64)
-    DrawPart(vg, images.leg,   bones.leg_r.wx, bones.leg_r.wy, bones.leg_r.wr, 16, 0, 32, 64)
-    DrawPart(vg, images.torso, bones.torso.wx, bones.torso.wy, bones.torso.wr, 32, 0, 64, 80)
-    DrawPart(vg, images.arm,   bones.arm_l.wx, bones.arm_l.wy, bones.arm_l.wr, 8,  0, 16, 48)
-    DrawPart(vg, images.arm,   bones.arm_r.wx, bones.arm_r.wy, bones.arm_r.wr, 8,  0, 16, 48)
-    DrawPart(vg, images.head,  bones.head.wx,  bones.head.wy,  bones.head.wr,  32, 48, 64, 64)
+    drawSkeleton(skelInst, currentAtlas, currentAtlasRects,
+                 W / dpr / 2, H / dpr / 2, facing, 1.0)
 
     nvgEndFrame(vg)
 end
 ```
 
+完整可运行示例参考 `scripts/main.lua`。
+
 ---
 
-## 4. 骨骼 Runtime 核心实现
+## 3. 骨骼 Runtime 使用
 
-这是与渲染方案无关的通用 runtime，计算骨骼树的世界变换。
-
-### 4.1 骨骼定义
+### 3.1 加载骨骼 + 动画
 
 ```lua
--- 骨骼树数据结构
--- x, y: 相对于父骨骼的本地偏移
--- rotation: 本地旋转（度）
--- length: 骨骼长度（可选，用于调试绘制）
-local skeleton = {
-    name = "root", x = 0, y = 0, rotation = 0,
-    children = {
-        {
-            name = "torso", x = 0, y = 0.4, rotation = 0,
-            children = {
-                { name = "head",  x = 0,     y = 0.5, rotation = 0 },
-                { name = "arm_l", x = -0.25, y = 0.45, rotation = 0 },
-                { name = "arm_r", x = 0.25,  y = 0.45, rotation = 0 },
-            }
-        },
-        { name = "leg_l", x = -0.12, y = 0, rotation = 0 },
-        { name = "leg_r", x = 0.12,  y = 0, rotation = 0 },
-    }
+local Skeleton = require "SkeletonRenderer"
+local SkelDef  = require "police_m.skeleton"
+local Anims    = require "police_m.animations"
+
+local skelInst = Skeleton.New(SkelDef)
+Skeleton.Play(skelInst, Anims.idle, { loop = true })
+```
+
+### 3.2 每帧驱动
+
+```lua
+function HandleUpdate(eventType, eventData)
+    local dt = eventData["TimeStep"]:GetFloat()
+    Skeleton.Update(skelInst, dt)              -- 关键帧采样 → currentRot
+    Skeleton.UpdateWorldTransforms(skelInst)   -- 写 part.wx/wy/wr
+end
+```
+
+### 3.3 武器挂点
+
+```lua
+local AxeDef = {
+    png = "weapons/axe.png", w = 24, h = 80,
+    anchor = { 12, 70 }, attachAt = { 7, 7 }, restRot = 30, z = 5,
+}
+
+Skeleton.AttachWeapon(skelInst, AxeDef, "handR")
+-- ... 切换 / 卸下：
+Skeleton.DetachWeapon(skelInst)
+```
+
+挂上后 `inst.parts.weapon` 出现在 part 列表中，`drawSkeleton` 会自动按 z 序绘制。
+
+### 3.4 公开 API
+
+| API | 作用 |
+|---|---|
+| `Skeleton.New(def)` | 解析骨骼 def，返回实例 |
+| `Skeleton.Play(inst, anim, opts)` | 切动画；`opts.loop` 覆盖 `anim.loop` |
+| `Skeleton.Update(inst, dt)` | 推进 phase + 写 currentRot |
+| `Skeleton.UpdateWorldTransforms(inst)` | 递推填充 `part.wx/wy/wr` |
+| `Skeleton.AttachWeapon(inst, def, parentName)` | 动态挂武器（默认 `handR`） |
+| `Skeleton.DetachWeapon(inst)` | 卸武器 |
+
+> 这些之外的字段（`Draw / SetBackend / Preload / fillRect / drawImage / ...`）**不存在**，
+> 仓库已清理；任何还引用这些 API 的代码都是过时残留，请改为自绘 + UpdateWorldTransforms。
+
+---
+
+## 4. 程序化动画驱动
+
+不用关键帧，纯代码改 `inst.parts[name].currentRot`，然后照常调 `UpdateWorldTransforms`。
+
+> ⚠️ 顺序：必须在 `Skeleton.Update(inst, dt)` **之后**改 currentRot。
+> 因为 `Update` 会先用关键帧覆盖一次。如果你不要关键帧，干脆不调 `Skeleton.Play`。
+
+### 4.1 呼吸/待机抖动
+
+```lua
+local time = 0
+function HandleUpdate(eventType, eventData)
+    local dt = eventData["TimeStep"]:GetFloat()
+    time = time + dt
+
+    -- 不调 Skeleton.Update：纯程序化控制
+    local breath = math.sin(time * 2.0) * 2.0
+    skelInst.parts.torso.currentRot = breath
+    skelInst.parts.head.currentRot  = breath * 0.5
+
+    Skeleton.UpdateWorldTransforms(skelInst)
+end
+```
+
+### 4.2 IK 风格手部跟随鼠标
+
+```lua
+-- 简单 2 段 IK：upperArmR + lowerArmR 让 handR 朝向鼠标
+local function aimRight(inst, mouseX, mouseY)
+    local shoulder = inst.parts.upperArmR
+    local sx, sy = (shoulder.wx or 0), (shoulder.wy or 0)
+    local angle = math.deg(math.atan(mouseY - sy, mouseX - sx))
+    inst.parts.upperArmR.currentRot = angle
+    inst.parts.lowerArmR.currentRot = 0
+end
+```
+
+---
+
+## 5. 图集（Atlas）打包约定
+
+### 5.1 为什么必须用图集
+
+TapTap Maker 单项目纹理资源数有上限（约 32 张就开始 cooking 失败）。
+30+ 个 part PNG 必须打包成少数几张 atlas。详细成因见
+`docs/taptap-integration-pitfalls.md` §1。
+
+### 5.2 atlas 文件约定
+
+- **POW2 尺寸**：`512 × 1024`、`256 × 128` 这样的 2 的幂。
+  非 POW2 会导致 ASTC/ETC 压缩跳过、显存浪费。
+- **网格布局**：行高 = max(part.h)，列宽 = max(part.w)，简单粗暴；
+  打包脚本 `tools/split_character.py` 可参照。
+- **PNG 必须带 sRGB chunk**：不带的话 cooking 会跳过 ASTC 压缩。
+  详见 pitfalls §5。
+
+### 5.3 atlasRects 元数据
+
+```lua
+local ATLAS_RECTS = {
+    police_m = {  -- atlas: 512x1024
+        torso = { x = 0,   y = 0,   w = 100, h = 140 },
+        head  = { x = 120, y = 0,   w = 120, h = 135 },
+        -- ...
+    },
 }
 ```
 
-### 4.2 世界变换递推
+- 坐标是**像素，Y 向下**（atlas 左上角原点）。
+- key 必须跟 `skeleton.parts` 的 key 一致。
+- `drawAtlasRegion` 内部会把它换算成 NanoVG pattern 的反向偏移。
 
-```lua
---- 递推计算骨骼树的世界变换
----@param bone table 骨骼节点
----@param parentWX number 父骨骼世界 X
----@param parentWY number 父骨骼世界 Y
----@param parentWR number 父骨骼世界旋转（度）
-function UpdateBoneTransforms(bone, parentWX, parentWY, parentWR)
-    local rad = math.rad(parentWR)
-    local cosR = math.cos(rad)
-    local sinR = math.sin(rad)
+### 5.4 数据生成
 
-    -- 本地坐标旋转到世界坐标
-    bone.wx = parentWX + cosR * bone.x - sinR * bone.y
-    bone.wy = parentWY + sinR * bone.x + cosR * bone.y
-    bone.wr = parentWR + bone.rotation
+`tools/split_character.py` 输入"原始大图 + bbox 配置"（见 `tools/configs/*.json`），
+一次性输出：
 
-    -- 递推子骨骼
-    if bone.children then
-        for _, child in ipairs(bone.children) do
-            UpdateBoneTransforms(child, bone.wx, bone.wy, bone.wr)
-        end
-    end
-end
-
--- 每帧调用
-function UpdateSkeleton(skeleton, rootX, rootY, rootRotation)
-    skeleton.x = rootX
-    skeleton.y = rootY
-    skeleton.rotation = rootRotation
-    UpdateBoneTransforms(skeleton, 0, 0, 0)
-end
-```
-
-### 4.3 骨骼查找辅助
-
-```lua
---- 按名称在骨骼树中查找节点
----@param bone table
----@param name string
----@return table|nil
-function FindBone(bone, name)
-    if bone.name == name then return bone end
-    if bone.children then
-        for _, child in ipairs(bone.children) do
-            local found = FindBone(child, name)
-            if found then return found end
-        end
-    end
-    return nil
-end
-
--- 也可以在初始化时建一个 name → bone 的 lookup table
----@param bone table
----@param lookup table<string, table>
-function BuildBoneLookup(bone, lookup)
-    lookup[bone.name] = bone
-    if bone.children then
-        for _, child in ipairs(bone.children) do
-            BuildBoneLookup(child, lookup)
-        end
-    end
-end
-
--- 用法
-local boneLookup = {}
-BuildBoneLookup(skeleton, boneLookup)
-local arm = boneLookup["arm_l"]
-arm.rotation = 30  -- 直接修改
-```
-
-### 4.4 输出到 Sprite 节点
-
-```lua
---- 将 runtime 计算的世界变换同步到引擎节点
----@param boneLookup table<string, table> 骨骼 name → bone 映射
----@param boneNodes table<string, Node> 骨骼 name → Node 映射
-function SyncToNodes(boneLookup, boneNodes)
-    for name, bone in pairs(boneLookup) do
-        local node = boneNodes[name]
-        if node then
-            node.position2D = Vector2(bone.wx, bone.wy)
-            node.rotation2D = bone.wr
-        end
-    end
-end
-```
+- `assets/Textures/<character>_atlas.png`（POW2 网格）
+- `<character>/skeleton.json`（含 `parent / anchor / attachAt / w / h / z`）
+- `ATLAS_RECTS` 表（可粘到 main.lua）
 
 ---
 
-## 5. 碰撞与动画解耦
+## 6. API 速查
 
-### 5.1 标准结构
+### 6.1 NanoVG 图片绘制
 
-```lua
---[[
-    CharacterNode              ← 物理碰撞体（简单形状）
-    ├── RigidBody2D            ← 物理刚体
-    ├── CollisionCircle2D      ← 碰撞形状
-    │
-    └── SpriteRoot             ← 视觉骨骼根（runtime 驱动）
-        ├── torso (StaticSprite2D)
-        ├── head  (StaticSprite2D)
-        ├── arm_l (StaticSprite2D)
-        ├── arm_r (StaticSprite2D)
-        ├── leg_l (StaticSprite2D)
-        └── leg_r (StaticSprite2D)
-]]
-```
+| 函数 | 说明 |
+|---|---|
+| `nvgCreateImage(vg, path, flags)` | 加载图片，返回 handle；同一 path 自己缓存复用 |
+| `nvgImageSize(vg, handle)` | 返回 `atlasW, atlasH`（像素） |
+| `nvgImagePattern(vg, ox, oy, patW, patH, angle, img, alpha)` | 创建图片填充 paint |
+| `nvgFillPaint(vg, paint)` + `nvgFill(vg)` | 应用 paint 到当前 path |
 
-### 5.2 实现
+### 6.2 NanoVG 变换栈
 
-```lua
-function CreateCharacterWithPhysics(scene, position)
-    -- 根节点
-    local charNode = scene:CreateChild("Character")
-    charNode.position2D = position
+| 函数 | 说明 |
+|---|---|
+| `nvgSave(vg)` / `nvgRestore(vg)` | 保存/恢复变换 + 状态 |
+| `nvgTranslate(vg, x, y)` | 平移 |
+| `nvgRotate(vg, radians)` | 旋转（弧度，顺时针为正） |
+| `nvgScale(vg, sx, sy)` | 缩放（`-sx` 实现水平翻转） |
 
-    -- === 碰撞体（简单胶囊） ===
-    local body = charNode:CreateComponent("RigidBody2D")
-    body.bodyType = BT_DYNAMIC
-    body.fixedRotation = true  -- 防止角色旋转
+### 6.3 SkeletonRenderer
 
-    -- 身体碰撞（椭圆用一个 Box 近似）
-    local bodyShape = charNode:CreateComponent("CollisionBox2D")
-    bodyShape.size = Vector2(0.5, 1.4)    -- 宽 0.5m，高 1.4m
-    bodyShape.center = Vector2(0, 0.7)    -- 中心在脚上方 0.7m
-    bodyShape.density = 1.0
-    bodyShape.friction = 0.3
+参见 §3.4。除此之外字段都已不存在。
 
-    -- 脚底传感器（地面检测）
-    local footSensor = charNode:CreateComponent("CollisionCircle2D")
-    footSensor.radius = 0.2
-    footSensor.center = Vector2(0, 0.05)
-    footSensor.isTrigger = true
+### 6.4 单位与坐标
 
-    -- === 视觉骨骼（独立子树） ===
-    local spriteRoot = charNode:CreateChild("SpriteRoot")
-    -- ... 在 spriteRoot 下创建骨骼部件节点 ...
+| 量 | 单位 / 方向 |
+|---|---|
+| `part.w / h / anchor / attachAt` | 像素，Y 向下（编辑器画布约定） |
+| `part.wx / wy` | 像素（相对骨骼根），Y 向下 |
+| `part.wr / restRot / track.rot` | 度，顺时针为正（与 NanoVG 一致） |
+| atlas `rect.x / y / w / h` | 图集像素坐标，Y 向下 |
+| NanoVG 屏幕坐标 | 像素，Y 向下 |
 
-    return charNode, spriteRoot
-end
-```
-
-### 5.3 受击判定（可选精细碰撞）
-
-```lua
--- 如果需要部位精确受击判定，在关键骨骼上加 trigger 碰撞体
-function AddHitboxToBone(boneNode, size)
-    -- 注意：碰撞体需要 RigidBody2D（设为 Kinematic）
-    local body = boneNode:CreateComponent("RigidBody2D")
-    body.bodyType = BT_KINEMATIC
-
-    local shape = boneNode:CreateComponent("CollisionBox2D")
-    shape.size = size
-    shape.isTrigger = true  -- 只检测，不产生物理反应
-
-    return shape
-end
-
--- 给头部加受击框
-AddHitboxToBone(boneNodes["head"], Vector2(0.3, 0.3))
-```
-
----
-
-## 6. 程序化动画驱动
-
-不使用关键帧数据，纯代码驱动骨骼旋转。
-
-### 6.1 呼吸/待机动画
-
-```lua
-function AnimateIdle(boneLookup, time)
-    local breath = math.sin(time * 2.0) * 2.0  -- ±2 度，2Hz
-
-    boneLookup["torso"].rotation = breath * 0.5
-    boneLookup["head"].rotation  = breath * 0.3
-    boneLookup["arm_l"].rotation = breath * 1.0 + 5.0   -- 略微下垂
-    boneLookup["arm_r"].rotation = breath * -1.0 - 5.0
-end
-```
-
-### 6.2 走路/跑步动画
-
-```lua
-function AnimateRun(boneLookup, time, speed)
-    local freq = speed * 3.0  -- 步频和速度挂钩
-    local t = time * freq
-
-    -- 腿交替摆动
-    boneLookup["leg_l"].rotation = math.sin(t) * 30.0
-    boneLookup["leg_r"].rotation = math.sin(t + math.pi) * 30.0  -- 反相
-
-    -- 手臂反向摆动
-    boneLookup["arm_l"].rotation = math.sin(t + math.pi) * 20.0
-    boneLookup["arm_r"].rotation = math.sin(t) * 20.0
-
-    -- 身体轻微前倾
-    boneLookup["torso"].rotation = -5.0
-
-    -- 头部稳定
-    boneLookup["head"].rotation = 5.0  -- 补偿身体前倾
-end
-```
-
-### 6.3 角色朝向翻转
-
-```lua
---- 翻转角色（Sprite 方案）
----@param boneNodes table<string, Node>
----@param faceLeft boolean
-function FlipCharacter(boneNodes, faceLeft)
-    for _, node in pairs(boneNodes) do
-        local sprite = node:GetComponent("StaticSprite2D")
-        if sprite then
-            sprite.flipX = faceLeft
-        end
-    end
-end
-
--- 或者直接缩放 SpriteRoot
-spriteRoot:SetScale2D(Vector2(faceLeft and -1.0 or 1.0, 1.0))
-```
-
----
-
-## 7. 帧动画 vs 骨骼动画混用
-
-项目中已有完整帧图素材（`assets/Sprites/`），可以和骨骼系统混用。
-
-### 7.1 帧动画播放器（StaticSprite2D 方式）
-
-```lua
----@class FrameAnimPlayer
----@field frames Sprite2D[]
----@field sprite StaticSprite2D
----@field frameTime number
----@field elapsed number
----@field currentFrame number
-local FrameAnimPlayer = {}
-FrameAnimPlayer.__index = FrameAnimPlayer
-
---- 创建帧动画播放器
----@param node Node
----@param framePaths string[] 帧图片路径列表
----@param fps number 帧率
----@return FrameAnimPlayer
-function FrameAnimPlayer.New(node, framePaths, fps)
-    local self = setmetatable({}, FrameAnimPlayer)
-
-    self.sprite = node:GetComponent("StaticSprite2D")
-    if not self.sprite then
-        self.sprite = node:CreateComponent("StaticSprite2D")
-        self.sprite.blendMode = BLEND_ALPHA
-    end
-
-    -- 预加载所有帧
-    self.frames = {}
-    for i, path in ipairs(framePaths) do
-        self.frames[i] = cache:GetResource("Sprite2D", path)
-    end
-
-    self.frameTime = 1.0 / fps
-    self.elapsed = 0
-    self.currentFrame = 1
-
-    -- 显示第一帧
-    self.sprite.sprite = self.frames[1]
-
-    return self
-end
-
---- 每帧更新
----@param dt number deltaTime
-function FrameAnimPlayer:Update(dt)
-    self.elapsed = self.elapsed + dt
-    if self.elapsed >= self.frameTime then
-        self.elapsed = self.elapsed - self.frameTime
-        self.currentFrame = self.currentFrame % #self.frames + 1
-        self.sprite.sprite = self.frames[self.currentFrame]
-    end
-end
-
--- 用法：
-local idleFrames = {}
-for i = 1, 8 do
-    idleFrames[i] = string.format("Sprites/female/civilian_f_1_idle/frame_%02d.png", i)
-end
-local animPlayer = FrameAnimPlayer.New(characterNode, idleFrames, 10)
-
--- 在 HandleUpdate 中：
-animPlayer:Update(dt)
-```
-
-### 7.2 策略选择
-
-```
-角色有部件拆分图 → 骨骼 runtime + StaticSprite2D
-角色只有完整帧图 → FrameAnimPlayer
-同一项目可以混用：
-  - 主角用骨骼（动作丰富、需要程序化控制）
-  - NPC 用帧动画（动作固定、美术已画好）
-```
-
----
-
-## 8. API 速查
-
-### StaticSprite2D 常用属性
-
-| 属性              | 类型      | 说明                           |
-| ----------------- | --------- | ------------------------------ |
-| `sprite`          | Sprite2D  | 贴图资源                       |
-| `blendMode`       | BlendMode | 混合模式（`BLEND_ALPHA` 常用） |
-| `flipX` / `flipY` | bool      | 水平/垂直翻转                  |
-| `color`           | Color     | 着色                           |
-| `alpha`           | float     | 透明度 0~1                     |
-| `useHotSpot`      | bool      | 是否使用自定义锚点             |
-| `hotSpot`         | Vector2   | 锚点位置（0~1 归一化）         |
-| `orderInLayer`    | int       | 绘制层级（越大越靠前）         |
-| `useDrawRect`     | bool      | 是否自定义绘制尺寸             |
-| `drawRect`        | Rect      | 自定义绘制矩形（米）           |
-| `useTextureRect`  | bool      | 是否使用局部纹理               |
-| `textureRect`     | Rect      | 纹理 UV 区域（0~1）            |
-
-### Sprite2D 资源属性
-
-| 属性        | 类型       | 说明               |
-| ----------- | ---------- | ------------------ |
-| `texture`   | Texture2D  | 底层纹理           |
-| `rectangle` | IntRect    | 在纹理中的像素区域 |
-| `hotSpot`   | Vector2    | 默认锚点           |
-| `offset`    | IntVector2 | 像素偏移           |
-
-### SpriteSheet2D（图集）
-
-```lua
--- 创建图集并手动定义切割区域
-local sheet = SpriteSheet2D:new()
-sheet.texture = cache:GetResource("Texture2D", "Parts/atlas.png")
-
--- 定义子精灵：name, 像素区域, 锚点
-sheet:DefineSprite("head",  IntRect(0, 0, 64, 64),   Vector2(0.5, 0.5))
-sheet:DefineSprite("torso", IntRect(64, 0, 128, 96),  Vector2(0.5, 0.0))
-sheet:DefineSprite("arm",   IntRect(128, 0, 160, 64), Vector2(0.5, 0.0))
-
--- 获取子精灵
-local headSprite = sheet:GetSprite("head")
-sprite.sprite = headSprite
-```
-
-### Node 2D 变换
-
-| 方法/属性                  | 说明               |
-| -------------------------- | ------------------ |
-| `node.position2D`          | Vector2 位置（米） |
-| `node.rotation2D`          | float 旋转（度）   |
-| `node:SetScale2D(Vector2)` | 2D 缩放            |
-
-### NanoVG 图片绘制
-
-| 函数                                              | 说明                  |
-| ------------------------------------------------- | --------------------- |
-| `nvgCreateImage(vg, path, flags)`                 | 加载图片，返回 handle |
-| `nvgImagePattern(vg, x,y,w,h, angle, img, alpha)` | 创建图片填充 paint    |
-| `nvgSave(vg)` / `nvgRestore(vg)`                  | 保存/恢复变换状态     |
-| `nvgTranslate(vg, x, y)`                          | 平移                  |
-| `nvgRotate(vg, radians)`                          | 旋转（弧度）          |
-| `nvgScale(vg, sx, sy)`                            | 缩放                  |
+> 所有"像素 vs 米"、"Y 向上 vs 向下"的换算在 NanoVG 路径下**一律不需要**——
+> 不再经过 UrhoX 2D Scene-graph，全程像素 + Y 向下，省心。
