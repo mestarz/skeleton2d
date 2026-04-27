@@ -1,8 +1,33 @@
+# Build & Runtime
+.build/
+dist/
+logs/
+.tmp/
+
+# Engine (read-only mounts, not part of this project)
+engine-docs/
+examples/
+templates/
+urhox-libs/
+schemas/
+lua-tools/
+.emmylua/
+prompts/
+
+# IDE / AI / Editor config
+.claude/
+.agent/
+.cli/
+.project/
+.vscode/
+.idea/
+
+# OS
 .DS_Store
 *.swp
+
+# Misc
 node_modules/
-.idea/
-.vscode/
 *.log
 tmp/
 *.meta
