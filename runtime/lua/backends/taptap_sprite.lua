@@ -87,10 +87,7 @@ function M.CreateNodes(parentNode, skeletonInst, opts)
         else
             atlasSprite = cache:GetResource("Sprite2D", o.atlasPath)
             if not atlasSprite then
-                print("[taptap_sprite] ERROR: atlas Sprite2D not found in ResourceCache: '" .. tostring(o.atlasPath) .. "'")
-                print("[taptap_sprite]   - Check the file exists under your TapTap project's Resources/Data/")
-                print("[taptap_sprite]   - Re-cook / reimport assets if you just added the atlas PNG")
-                print("[taptap_sprite]   - The path is resolved relative to ResourceCache roots, not to scripts/")
+                print("[taptap_sprite] ERROR: atlas Sprite2D not found: '" .. tostring(o.atlasPath) .. "'")
             else
                 atlasW = o.atlasSize.w
                 atlasH = o.atlasSize.h
