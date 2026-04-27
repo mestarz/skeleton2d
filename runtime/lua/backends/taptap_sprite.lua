@@ -73,12 +73,29 @@ function M.CreateNodes(parentNode, skeletonInst, opts)
     local invPPM = 1 / ppm
 
     -- 图集模式：预加载图集 Sprite2D（所有部件共享同一张贴图）
+    -- 注意：如果用户传了 atlasPath 但加载失败，应当显式报错，而不是悄悄回退到
+    -- 单 PNG 路径（那条路径会触发一堆"找不到 part PNG"的二次错误，反而掩盖
+    -- 真正的"图集没加载"原因）。
+    local atlasMode  = (o.atlasPath ~= nil)
     local atlasSprite = nil
     local atlasW, atlasH = 1, 1
-    if o.atlasPath and o.atlasRects and o.atlasSize then
-        atlasSprite = cache and cache:GetResource("Sprite2D", o.atlasPath)
-        atlasW = o.atlasSize.w
-        atlasH = o.atlasSize.h
+    if atlasMode then
+        if not (o.atlasRects and o.atlasSize) then
+            print("[taptap_sprite] ERROR: atlasPath given but atlasRects/atlasSize missing -> " .. tostring(o.atlasPath))
+        elseif not cache then
+            print("[taptap_sprite] ERROR: no ResourceCache available; cannot load atlas " .. tostring(o.atlasPath))
+        else
+            atlasSprite = cache:GetResource("Sprite2D", o.atlasPath)
+            if not atlasSprite then
+                print("[taptap_sprite] ERROR: atlas Sprite2D not found in ResourceCache: '" .. tostring(o.atlasPath) .. "'")
+                print("[taptap_sprite]   - Check the file exists under your TapTap project's Resources/Data/")
+                print("[taptap_sprite]   - Re-cook / reimport assets if you just added the atlas PNG")
+                print("[taptap_sprite]   - The path is resolved relative to ResourceCache roots, not to scripts/")
+            else
+                atlasW = o.atlasSize.w
+                atlasH = o.atlasSize.h
+            end
+        end
     end
 
     local boneNodes = {}
@@ -95,6 +112,13 @@ function M.CreateNodes(parentNode, skeletonInst, opts)
                 r.x / atlasW, r.y / atlasH,
                 (r.x + r.w) / atlasW, (r.y + r.h) / atlasH
             )
+        elseif atlasMode then
+            -- 处于图集模式但 atlas 没加载到 / 或者 part 不在 atlasRects 里：
+            -- 不要回退到单 PNG 路径（那些 PNG 通常已经被打包流程移除），
+            -- 否则会污染日志、掩盖真正的图集错误。直接留空 sprite，警告一行。
+            if atlasSprite and not o.atlasRects[name] then
+                print("[taptap_sprite] WARN: part '" .. name .. "' not in atlasRects; skipped")
+            end
         elseif p.png and cache then
             local res = cache:GetResource("Sprite2D", o.texturePrefix .. p.png)
             if res then sprite.sprite = res end
