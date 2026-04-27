@@ -255,6 +255,7 @@ function Start()
     SampleInitMouseMode(MM_FREE)
 
     setupScene()
+
     buildCharacter(charIndex)
     setupNanoVG()
 

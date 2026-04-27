@@ -105,9 +105,10 @@ function M.CreateNodes(parentNode, skeletonInst, opts)
             sprite.sprite = atlasSprite
             local r = o.atlasRects[name]
             sprite.useTextureRect = true
+            -- UV Y 轴翻转：图集像素坐标 Y=0 在顶部，OpenGL UV Y=0 在底部
             sprite.textureRect = Rect(
-                r.x / atlasW, r.y / atlasH,
-                (r.x + r.w) / atlasW, (r.y + r.h) / atlasH
+                r.x / atlasW,           1.0 - (r.y + r.h) / atlasH,
+                (r.x + r.w) / atlasW,   1.0 - r.y / atlasH
             )
         elseif atlasMode then
             -- 处于图集模式但 atlas 没加载到 / 或者 part 不在 atlasRects 里：
