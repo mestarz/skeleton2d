@@ -1,0 +1,120 @@
+-- 由 skeleton2d 编辑器导出的人形动画定义
+-- 原始数据: examples/humanoid/animations.json
+
+return {
+    idle = {
+        duration = 1.6,
+        loop = true,
+        tracks = {
+            torso = {
+                { t = 0.0, rot = 0 },
+                { t = 0.8, rot = -1.5 },
+                { t = 1.6, rot = 0 },
+            },
+            head = {
+                { t = 0.0, rot = 0 },
+                { t = 0.8, rot = 1 },
+                { t = 1.6, rot = 0 },
+            },
+        },
+    },
+    walk = {
+        duration = 0.6,
+        loop = true,
+        tracks = {
+            thighL = {
+                { t = 0.0, rot = 25 },
+                { t = 0.3, rot = -25 },
+                { t = 0.6, rot = 25 },
+            },
+            thighR = {
+                { t = 0.0, rot = -25 },
+                { t = 0.3, rot = 25 },
+                { t = 0.6, rot = -25 },
+            },
+            shinL = {
+                { t = 0.0, rot = -10 },
+                { t = 0.3, rot = 20 },
+                { t = 0.6, rot = -10 },
+            },
+            shinR = {
+                { t = 0.0, rot = 20 },
+                { t = 0.3, rot = -10 },
+                { t = 0.6, rot = 20 },
+            },
+            upperArmL = {
+                { t = 0.0, rot = -20 },
+                { t = 0.3, rot = 20 },
+                { t = 0.6, rot = -20 },
+            },
+            upperArmR = {
+                { t = 0.0, rot = 20 },
+                { t = 0.3, rot = -20 },
+                { t = 0.6, rot = 20 },
+            },
+        },
+    },
+    swing = {
+        duration = 0.4,
+        loop = false,
+        tracks = {
+            upperArmR = {
+                { t = 0.00, rot = 0 },
+                { t = 0.10, rot = -90 },
+                { t = 0.20, rot = 60 },
+                { t = 0.40, rot = 0 },
+            },
+            lowerArmR = {
+                { t = 0.00, rot = 10 },
+                { t = 0.10, rot = -30 },
+                { t = 0.20, rot = 80 },
+                { t = 0.40, rot = 10 },
+            },
+            torso = {
+                { t = 0.10, rot = -8 },
+                { t = 0.20, rot = 8 },
+                { t = 0.40, rot = 0 },
+            },
+        },
+    },
+    shoot = {
+        duration = 0.5,
+        loop = false,
+        tracks = {
+            upperArmL = {
+                { t = 0.0, rot = -30 },
+                { t = 0.5, rot = -30 },
+            },
+            upperArmR = {
+                { t = 0.0, rot = 0 },
+                { t = 0.25, rot = -45 },
+                { t = 0.30, rot = -50 },
+                { t = 0.35, rot = 0 },
+                { t = 0.5, rot = 0 },
+            },
+            lowerArmR = {
+                { t = 0.0, rot = 10 },
+                { t = 0.25, rot = 90 },
+                { t = 0.30, rot = 100 },
+                { t = 0.35, rot = 10 },
+                { t = 0.5, rot = 10 },
+            },
+        },
+    },
+    hit = {
+        duration = 0.25,
+        loop = false,
+        tracks = {
+            torso = {
+                { t = 0.00, rot = 0 },
+                { t = 0.08, rot = 12 },
+                { t = 0.25, rot = 0 },
+            },
+            head = {
+                { t = 0.00, rot = 0 },
+                { t = 0.08, rot = 18 },
+                { t = 0.25, rot = 0 },
+            },
+        },
+    },
+}
