@@ -1,0 +1,295 @@
+{
+  "id": "police_m_v2",
+  "version": 1,
+  "root": "chest",
+  "parts": {
+    "chest": {
+      "parent": null,
+      "w": 100,
+      "h": 80,
+      "anchor": [
+        50,
+        80
+      ],
+      "attachAt": [
+        0,
+        0
+      ],
+      "restRot": 0,
+      "z": 0,
+      "png": "police_m_v2/parts/chest.png"
+    },
+    "pelvis": {
+      "parent": "chest",
+      "w": 100,
+      "h": 60,
+      "anchor": [
+        50,
+        0
+      ],
+      "attachAt": [
+        50,
+        80
+      ],
+      "restRot": 0,
+      "z": 0,
+      "png": "police_m_v2/parts/pelvis.png"
+    },
+    "neck": {
+      "parent": "chest",
+      "w": 30,
+      "h": 25,
+      "anchor": [
+        15,
+        25
+      ],
+      "attachAt": [
+        50,
+        10
+      ],
+      "restRot": 0,
+      "z": 0.5,
+      "png": "police_m_v2/parts/neck.png"
+    },
+    "head": {
+      "parent": "neck",
+      "w": 120,
+      "h": 135,
+      "anchor": [
+        60,
+        130
+      ],
+      "attachAt": [
+        15,
+        15
+      ],
+      "restRot": 0,
+      "z": 1,
+      "png": "police_m_v2/parts/head.png"
+    },
+    "shoulderL": {
+      "parent": "chest",
+      "w": 30,
+      "h": 25,
+      "anchor": [
+        20,
+        12
+      ],
+      "attachAt": [
+        20,
+        17
+      ],
+      "restRot": 0,
+      "z": 1.5,
+      "png": "police_m_v2/parts/shoulderL.png"
+    },
+    "upperArmL": {
+      "parent": "shoulderL",
+      "w": 40,
+      "h": 80,
+      "anchor": [
+        30,
+        2
+      ],
+      "attachAt": [
+        20,
+        12
+      ],
+      "restRot": 0,
+      "z": 2,
+      "png": "police_m_v2/parts/upperArmL.png"
+    },
+    "lowerArmL": {
+      "parent": "upperArmL",
+      "w": 45,
+      "h": 70,
+      "anchor": [
+        25,
+        0
+      ],
+      "attachAt": [
+        25,
+        75
+      ],
+      "restRot": 0,
+      "z": 2,
+      "png": "police_m_v2/parts/lowerArmL.png"
+    },
+    "handL": {
+      "parent": "lowerArmL",
+      "w": 40,
+      "h": 30,
+      "anchor": [
+        20,
+        0
+      ],
+      "attachAt": [
+        25,
+        60
+      ],
+      "restRot": 0,
+      "z": 2,
+      "png": "police_m_v2/parts/handL.png"
+    },
+    "shoulderR": {
+      "parent": "chest",
+      "w": 30,
+      "h": 25,
+      "anchor": [
+        15,
+        12
+      ],
+      "attachAt": [
+        85,
+        17
+      ],
+      "restRot": 0,
+      "z": 1.5,
+      "png": "police_m_v2/parts/shoulderR.png"
+    },
+    "upperArmR": {
+      "parent": "shoulderR",
+      "w": 45,
+      "h": 80,
+      "anchor": [
+        5,
+        2
+      ],
+      "attachAt": [
+        15,
+        12
+      ],
+      "restRot": 0,
+      "z": 2,
+      "png": "police_m_v2/parts/upperArmR.png"
+    },
+    "lowerArmR": {
+      "parent": "upperArmR",
+      "w": 50,
+      "h": 70,
+      "anchor": [
+        15,
+        0
+      ],
+      "attachAt": [
+        15,
+        75
+      ],
+      "restRot": 0,
+      "z": 2,
+      "png": "police_m_v2/parts/lowerArmR.png"
+    },
+    "handR": {
+      "parent": "lowerArmR",
+      "w": 45,
+      "h": 35,
+      "anchor": [
+        20,
+        0
+      ],
+      "attachAt": [
+        25,
+        60
+      ],
+      "restRot": 0,
+      "z": 2,
+      "png": "police_m_v2/parts/handR.png"
+    },
+    "thighL": {
+      "parent": "pelvis",
+      "w": 45,
+      "h": 110,
+      "anchor": [
+        18,
+        10
+      ],
+      "attachAt": [
+        38,
+        60
+      ],
+      "restRot": 0,
+      "z": -2,
+      "png": "police_m_v2/parts/thighL.png"
+    },
+    "shinL": {
+      "parent": "thighL",
+      "w": 45,
+      "h": 90,
+      "anchor": [
+        18,
+        5
+      ],
+      "attachAt": [
+        18,
+        105
+      ],
+      "restRot": 0,
+      "z": -2,
+      "png": "police_m_v2/parts/shinL.png"
+    },
+    "footL": {
+      "parent": "shinL",
+      "w": 55,
+      "h": 35,
+      "anchor": [
+        25,
+        5
+      ],
+      "attachAt": [
+        15,
+        85
+      ],
+      "restRot": 0,
+      "z": -2,
+      "png": "police_m_v2/parts/footL.png"
+    },
+    "thighR": {
+      "parent": "pelvis",
+      "w": 45,
+      "h": 110,
+      "anchor": [
+        18,
+        10
+      ],
+      "attachAt": [
+        63,
+        60
+      ],
+      "restRot": 0,
+      "z": -2,
+      "png": "police_m_v2/parts/thighR.png"
+    },
+    "shinR": {
+      "parent": "thighR",
+      "w": 45,
+      "h": 90,
+      "anchor": [
+        18,
+        5
+      ],
+      "attachAt": [
+        18,
+        105
+      ],
+      "restRot": 0,
+      "z": -2,
+      "png": "police_m_v2/parts/shinR.png"
+    },
+    "footR": {
+      "parent": "shinR",
+      "w": 55,
+      "h": 35,
+      "anchor": [
+        27,
+        5
+      ],
+      "attachAt": [
+        22,
+        85
+      ],
+      "restRot": 0,
+      "z": -2,
+      "png": "police_m_v2/parts/footR.png"
+    }
+  }
+}

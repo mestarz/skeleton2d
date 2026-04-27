@@ -52,6 +52,26 @@ local ATLAS_RECTS = {
         handgun = { x =   0, y = 0, w = 118, h =  84 },
         knife   = { x = 118, y = 0, w = 106, h = 111 },
     },
+    police_m_v2 = {  -- atlas: 512x256, 18-part FFDH packing
+        chest     = { x = 310, y =   0, w = 100, h =  80 },
+        head      = { x =   0, y =   0, w = 120, h = 135 },
+        thighL    = { x = 122, y =   0, w =  45, h = 110 },
+        thighR    = { x = 169, y =   0, w =  45, h = 110 },
+        shinL     = { x = 216, y =   0, w =  45, h =  90 },
+        shinR     = { x = 263, y =   0, w =  45, h =  90 },
+        upperArmL = { x = 412, y =   0, w =  40, h =  80 },
+        upperArmR = { x = 454, y =   0, w =  45, h =  80 },
+        lowerArmL = { x =   0, y = 137, w =  45, h =  70 },
+        lowerArmR = { x =  47, y = 137, w =  50, h =  70 },
+        pelvis    = { x =  99, y = 137, w = 100, h =  60 },
+        footL     = { x = 201, y = 137, w =  55, h =  35 },
+        footR     = { x = 258, y = 137, w =  55, h =  35 },
+        handR     = { x = 315, y = 137, w =  45, h =  35 },
+        handL     = { x = 362, y = 137, w =  40, h =  30 },
+        neck      = { x = 404, y = 137, w =  30, h =  25 },
+        shoulderL = { x = 436, y = 137, w =  30, h =  25 },
+        shoulderR = { x = 468, y = 137, w =  30, h =  25 },
+    },
 }
 
 local CHARACTERS = {
@@ -67,6 +87,12 @@ local CHARACTERS = {
       atlasPng   = "Textures/char_civilian.png",
       atlasRects = ATLAS_RECTS.civilian_f,
       atlasSize  = { w = 512, h = 1024 } },
+    { id = "police_m_v2",
+      skeleton   = require "police_m_v2.skeleton",
+      animations = require "police_m_v2.animations",
+      atlasPng   = "Textures/char_police_v2.png",
+      atlasRects = ATLAS_RECTS.police_m_v2,
+      atlasSize  = { w = 512, h = 256 } },
 }
 
 local WEAPON_NAMES = { "handgun", "knife" }
@@ -97,6 +123,72 @@ local moveSpeed = 150  -- 像素/秒
 
 local showJoints = true
 local showHUD    = true
+
+-- ============================================================================
+-- 路线乙临时 hack：scaleY / rootOffset / ease 通道（不入 SkeletonRenderer）
+-- 后续若决策门通过，再收敛进 runtime
+-- ============================================================================
+
+local function easeInOut(t)
+    return t * t * (3 - 2 * t)
+end
+
+--- 在两个关键帧之间插值一个数值字段（带 ease）
+--- @param a number 起始关键帧值
+--- @param b number 终止关键帧值
+--- @param t number 0..1
+--- @param easeName string|nil "easeInOut" 或 nil（线性）
+local function lerpEased(a, b, t, easeName)
+    if easeName == "easeInOut" then t = easeInOut(t) end
+    return a + (b - a) * t
+end
+
+--- 在一组关键帧中按 phase 找出指定字段的当前值（找不到返回 default）
+local function sampleKey(kfs, phase, key, default)
+    if not kfs or #kfs == 0 then return default end
+    -- 找区间
+    local i1, i2 = 1, #kfs
+    for i = 1, #kfs - 1 do
+        if phase >= kfs[i].t and phase <= kfs[i + 1].t then
+            i1, i2 = i, i + 1
+            break
+        end
+    end
+    local k1, k2 = kfs[i1], kfs[i2]
+    local v1 = k1[key]
+    local v2 = k2[key]
+    if v1 == nil and v2 == nil then return default end
+    v1 = v1 or default
+    v2 = v2 or default
+    local span = k2.t - k1.t
+    if span <= 0 then return v2 end
+    local t = (phase - k1.t) / span
+    return lerpEased(v1, v2, t, k1.ease)
+end
+
+--- 在 Skeleton.Update 之后调用：把扩展通道（scaleY、rootOffset）写到 inst/parts
+local function applyExtChannels(inst)
+    if not inst or not inst.animation then return end
+    local anim = inst.animation
+    local phase = inst.phase or 0
+
+    -- per-part scaleY
+    if anim.tracks then
+        for partName, kfs in pairs(anim.tracks) do
+            local part = inst.parts[partName]
+            if part then
+                part.currentScaleY = sampleKey(kfs, phase, "scaleY", 1)
+            end
+        end
+    end
+
+    -- 全局 rootOffset.y
+    if anim.rootOffset then
+        inst.rootOffsetY = sampleKey(anim.rootOffset, phase, "y", 0)
+    else
+        inst.rootOffsetY = 0
+    end
+end
 
 -- ============================================================================
 -- NanoVG 图集绘制
@@ -178,6 +270,11 @@ local function drawSkeletonNanoVG(inst, sx, sy, fac, sc)
         nvgScale(vg, sc, sc)
     end
 
+    -- 路线乙 hack：整体 root 微浮（呼吸 / walk bob）
+    if inst.rootOffsetY and inst.rootOffsetY ~= 0 then
+        nvgTranslate(vg, 0, inst.rootOffsetY)
+    end
+
     -- 收集所有 part，按 z 排序绘制
     local sorted = {}
     for name, p in pairs(inst.parts) do
@@ -195,6 +292,10 @@ local function drawSkeletonNanoVG(inst, sx, sy, fac, sc)
         -- skeleton2d 的 wx/wy 是像素坐标，Y 向下
         nvgTranslate(vg, p.wx, p.wy)
         nvgRotate(vg, math.rad(p.wr or 0))
+        -- 路线乙 hack：仅本 part 自身缩放，不影响子节点（子的 wx/wy 已由 SkeletonRenderer 算定）
+        if p.currentScaleY and p.currentScaleY ~= 1 then
+            nvgScale(vg, 1, p.currentScaleY)
+        end
         nvgTranslate(vg, -p.anchor[1], -p.anchor[2])
 
         -- 绘制图集子区域
@@ -402,6 +503,8 @@ function HandleUpdate(eventType, eventData)
     -- 更新骨骼动画
     Skeleton.Update(skelInst, dt)
     Skeleton.UpdateWorldTransforms(skelInst)
+    -- 路线乙 hack：在 world transform 之后，sample 扩展通道
+    applyExtChannels(skelInst)
 end
 
 function HandleNanoVGRender(eventType, eventData)
