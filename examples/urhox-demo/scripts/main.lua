@@ -2,23 +2,20 @@
 -- skeleton2d 技术验证 Demo
 -- 验证: SkeletonRenderer + NanoVG 后端 在 UrhoX 中的完整运行
 --
--- 本文件直接 require 仓库根的 runtime 和 examples 数据，
+-- 部署方式: 在 scripts/ 中创建符号链接指向仓库源文件，
 -- 不复制任何 SkeletonRenderer / skeleton / animations 副本。
+--
+-- 需要的符号链接（相对于 scripts/ 目录）:
+--   SkeletonRenderer.lua  → ../../../runtime/lua/SkeletonRenderer.lua
+--   humanoid/skeleton.lua → ../../../../examples/humanoid/skeleton.lua
+--   humanoid/animations.lua → ../../../../examples/humanoid/animations.lua
 -- ============================================================================
 
 require "LuaScripts/Utilities/Sample"
 
--- 把仓库根的 runtime/lua/ 和 examples/ 加入搜索路径
--- SCRIPT_ROOT = 当前脚本所在目录 (examples/urhox-demo/scripts/)
--- 向上三级即为仓库根
-local ROOT = SCRIPT_ROOT .. "/../../.."
-package.path = package.path
-    .. ";" .. ROOT .. "/runtime/lua/?.lua"
-    .. ";" .. ROOT .. "/examples/?.lua"
-
--- skeleton2d 运行时（仓库唯一源: runtime/lua/SkeletonRenderer.lua）
+-- skeleton2d 运行时（通过符号链接指向仓库唯一源: runtime/lua/SkeletonRenderer.lua）
 local Skeleton = require "SkeletonRenderer"
--- 编辑器导出数据（仓库唯一源: examples/humanoid/{skeleton,animations}.lua）
+-- 编辑器导出数据（通过符号链接指向仓库唯一源: examples/humanoid/{skeleton,animations}.lua）
 local SkelDef  = require "humanoid.skeleton"
 local Anims    = require "humanoid.animations"
 

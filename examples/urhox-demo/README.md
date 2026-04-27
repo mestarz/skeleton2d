@@ -54,13 +54,19 @@
 examples/urhox-demo/
 ├── README.md
 └── scripts/
-    └── main.lua          ← 唯一文件，require 仓库主 runtime
+    ├── main.lua                         ← demo 入口
+    ├── SkeletonRenderer.lua             → symlink → ../../../runtime/lua/SkeletonRenderer.lua
+    └── humanoid/
+        ├── skeleton.lua                 → symlink → ../../../../examples/humanoid/skeleton.lua
+        └── animations.lua              → symlink → ../../../../examples/humanoid/animations.lua
 ```
 
-`main.lua` 通过 `package.path` 直接引用仓库根文件，不维护副本：
+`main.lua` 通过**符号链接**引用仓库唯一源文件，不维护副本、不修改 `package.path`：
 
+```lua
+local Skeleton = require "SkeletonRenderer"       -- → runtime/lua/SkeletonRenderer.lua
+local SkelDef  = require "humanoid.skeleton"       -- → examples/humanoid/skeleton.lua
+local Anims    = require "humanoid.animations"     -- → examples/humanoid/animations.lua
 ```
-runtime/lua/SkeletonRenderer.lua     ← require "SkeletonRenderer"
-examples/humanoid/skeleton.lua       ← require "humanoid.skeleton"
-examples/humanoid/animations.lua     ← require "humanoid.animations"
-```
+
+> UrhoX 沙箱不支持 `package.path` 修改为 `scripts/` 外部目录，因此使用符号链接使模块可在 `scripts/` 内解析。
