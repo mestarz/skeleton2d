@@ -140,6 +140,111 @@ local Anims   = loadJSON("data/animations/humanoid.json")
 
 runtime 已兼容 `anchor = [x, y]`（数组）与 `anchor = { x = , y = }`（命名）两种格式。
 
+---
+
+## TapTap Maker (UrhoX) Sprite 集成
+
+如果目标平台是 **TapTap Maker / UrhoX**，骨骼部件应直接挂成 `StaticSprite2D` 节点，
+让引擎场景图来绘制（自动支持物理、批处理、混合层级）。skeleton2d 自带适配器：
+`runtime/lua/backends/taptap_sprite.lua`。
+
+### 一次性建节点
+
+```lua
+local Skeleton = require "external.skeleton2d.runtime.lua.SkeletonRenderer"
+local SpriteBE = require "external.skeleton2d.runtime.lua.backends.taptap_sprite"
+
+local SkelDef = require "data.skeletons.humanoid"
+local Anims   = require "data.animations.humanoid"
+
+function Player.Init(self, scene, spawnPos)
+    self.charNode = scene:CreateChild("Player")
+    self.charNode.position2D = spawnPos
+
+    -- 物理碰撞 / TouchControls 等其他组件挂在 charNode
+    -- ...
+
+    -- 骨骼视觉根（与碰撞解耦，方便整体翻转 / 缩放）
+    self.spriteRoot = self.charNode:CreateChild("SpriteRoot")
+
+    self.skeleton  = Skeleton.New(SkelDef)
+    self.boneNodes = SpriteBE.CreateNodes(self.spriteRoot, self.skeleton, {
+        cache            = cache,         -- ResourceCache（全局即可省略）
+        texturePrefix    = "Textures/",
+        pixelsPerMeter   = 100,
+        baseOrderInLayer = 0,
+    })
+
+    Skeleton.Play(self.skeleton, Anims.idle)
+end
+```
+
+> **重要**：`SkelDef.parts[*].png` 应是相对 `texturePrefix` 的路径。例如 `parts.head.png = "head.png"`，
+> 加上前缀 `"Textures/"` 解析为 `cache:GetResource("Sprite2D", "Textures/head.png")`。
+
+### 每帧
+
+```lua
+function Player.Update(self, dt)
+    -- 切动作（可任意时刻调）
+    Skeleton.Play(self.skeleton,
+        self.attacking and Anims.swing
+        or self.moving and Anims.walk
+        or Anims.idle)
+
+    Skeleton.Update(self.skeleton, dt)              -- 算 currentRot
+    Skeleton.UpdateWorldTransforms(self.skeleton)   -- 算 wx / wy / wr
+    SpriteBE.Sync(self.boneNodes, self.skeleton)    -- 写到 node.position2D / rotation2D
+end
+
+function Player.SetFacing(self, facing)
+    self.spriteRoot:SetScale2D(Vector2(facing < 0 and -1 or 1, 1))
+end
+
+function Player.Destroy(self)
+    SpriteBE.Destroy(self.boneNodes)
+    self.charNode:Remove()
+end
+```
+
+> **不要** 在 `Player.Update` 里画图；StaticSprite2D 由引擎自动渲染。
+
+### 装备武器
+
+```lua
+local AxeDef = {
+    png = "weapons/axe.png", w = 24, h = 80,
+    anchor = { 12, 70 }, attachAt = { 7, 7 }, restRot = 30, z = 5,
+}
+
+function Player.EquipWeapon(self)
+    Skeleton.AttachWeapon(self.skeleton, AxeDef, "handR")
+    SpriteBE.AttachPart(self.boneNodes, self.spriteRoot, self.skeleton, "weapon", {
+        cache = cache, texturePrefix = "Textures/", pixelsPerMeter = 100,
+    })
+end
+
+function Player.UnequipWeapon(self)
+    SpriteBE.DetachPart(self.boneNodes, "weapon")
+    Skeleton.DetachWeapon(self.skeleton)
+end
+```
+
+### 坐标系约定
+
+- skeleton2d 内部坐标系：**像素，Y 向下**（编辑器画布约定）。
+- UrhoX 2D 坐标系：**米（默认 100px=1m），Y 向上**。
+- 适配器自动按 `pixelsPerMeter` 换算并翻转 Y / 旋转方向，使最终视觉与编辑器一致。
+- 如果你的素材方向跟编辑器相反，可以在 `spriteRoot:SetScale2D(Vector2(1, -1))` 上手动翻转。
+
+### 性能小贴士
+
+- `CreateNodes` 只在角色 Init 时调一次；`Sync` 是每帧热路径，没有 GC 分配。
+- 同一动作切换到 `Skeleton.Play` 是 no-op（除非 `restart=true`），不会重置 phase。
+- 角色不可见时可以 `self.spriteRoot.enabled = false` 暂停整子树渲染（runtime 不需要停）。
+
+---
+
 ## 升级 submodule
 
 ```bash

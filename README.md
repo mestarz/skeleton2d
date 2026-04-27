@@ -6,7 +6,8 @@
 ## 是什么
 
 - **数据规范**：JSON 格式描述骨骼层级 + 动作关键帧（rot 通道线性插值）
-- **运行时**：纯 Lua 实现（约 200 行，零依赖）+ JS 实现（编辑器内置）
+- **运行时**：纯 Lua 实现（约 250 行，零依赖）+ JS 实现（编辑器内置）
+- **后端适配器**：开箱即用的 TapTap Maker / UrhoX `StaticSprite2D` 集成（`runtime/lua/backends/taptap_sprite.lua`）
 - **编辑器/浏览器**：单文件 HTML，双击打开，拖拽 PNG → 调骨骼 → 预览动作 → 导出 JSON+Lua
 
 ## 快速上手

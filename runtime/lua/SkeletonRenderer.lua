@@ -167,6 +167,34 @@ function Skeleton.Update(inst, dt)
     applyAnimation(inst, anim, inst.phase)
 end
 
+-- ---------- 世界变换递推（场景图后端用） ----------
+-- 与 Draw() 互不依赖：不需要 backend，也不依赖变换栈。
+-- 调用后每个 part 都拥有 wx, wy, wr 三个字段，单位为像素 / 度，
+-- **相对于骨骼根节点**（不含角色级 facing / 位置 / 缩放）。
+-- 角色级变换由调用方通过外部容器节点（spriteRoot）施加。
+local function recurseWorld(inst, name, px, py, pr)
+    local p = inst.parts[name]
+    if not p then return end
+    local rad = math.rad(pr)
+    local cosR, sinR = math.cos(rad), math.sin(rad)
+    local ax, ay = p.attachAt[1], p.attachAt[2]
+    p.wx = px + cosR * ax - sinR * ay
+    p.wy = py + sinR * ax + cosR * ay
+    p.wr = pr + (p.currentRot or 0)
+    local kids = inst.children[name]
+    if kids then
+        for i = 1, #kids do
+            recurseWorld(inst, kids[i], p.wx, p.wy, p.wr)
+        end
+    end
+end
+
+function Skeleton.UpdateWorldTransforms(inst)
+    if inst.rootName then
+        recurseWorld(inst, inst.rootName, 0, 0, 0)
+    end
+end
+
 local function drawTree(inst, name, be)
     local p = inst.parts[name]
     if not p then return end
