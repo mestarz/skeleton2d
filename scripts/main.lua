@@ -59,13 +59,13 @@ local CHARACTERS = {
     { id = "police_m",
       skeleton   = require "police_m.skeleton",
       animations = require "police_m.animations",
-      atlasPng   = "Textures/police_m_atlas.png",
+      atlasPng   = "Textures/char_police.png",
       atlasRects = ATLAS_RECTS.police_m,
       atlasSize  = { w = 512, h = 1024 } },
     { id = "civilian_f",
       skeleton   = require "civilian_f.skeleton",
       animations = require "civilian_f.animations",
-      atlasPng   = "Textures/civilian_f_atlas.png",
+      atlasPng   = "Textures/char_civilian.png",
       atlasRects = ATLAS_RECTS.civilian_f,
       atlasSize  = { w = 512, h = 1024 } },
 }
@@ -132,7 +132,7 @@ local function attachCurrentWeapon()
     local weaponRects = { weapon = ATLAS_RECTS.weapons[WEAPON_NAMES[weaponIdx]] }
 
     SpriteBE.AttachPart(boneNodes, spriteRoot, skelInst, "weapon", {
-        atlasPath        = "Textures/weapons_atlas.png",
+        atlasPath        = "Textures/items_weapons.png",
         atlasRects       = weaponRects,
         atlasSize        = WEAPONS_ATLAS_SIZE,
         pixelsPerMeter   = PIXELS_PER_METER,

@@ -1,1 +1,0 @@
-../../../../examples/humanoid/skeleton.lua
